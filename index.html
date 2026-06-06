@@ -202,19 +202,15 @@ function getBranchData(br) {
   const today = new Date().toISOString().slice(0,10);
   let curIdx = bw.findIndex(w => w.week_ending >= today);
   if (curIdx < 0) curIdx = bw.length - 1;
+  // Show previous week as "current" for review purposes
+  if (curIdx > 0) curIdx = curIdx - 1;
   const stockMap = computeStocks(bw, ul, bOrds, bLines, bMats, bTransfers);
   return { bw, bMats, ul, bOrds, bLines, bTransfers, curIdx, stockMap };
 }
 
 // ── Render ─────────────────────────────────────────────────────────────────
-function render() {
-  const root = document.getElementById("root");
-  if (state.loading) { root.innerHTML = '<div class="loading">Loading…</div>'; return; }
-  if (state.error) { root.innerHTML = `<div class="loading" style="color:#f87171">Error: ${state.error}</div>`; return; }
-
+function renderShell() {
   const { branches, branch, tab } = state;
-
-  // Compute branch alert states for tabs
   const branchAlerts = {};
   branches.forEach(br => {
     const { bw, bMats, ul, stockMap, curIdx } = getBranchData(br);
@@ -224,39 +220,65 @@ function render() {
     const hf = !ha && bMats.some(m => { const av = avg6(bw, curIdx, m.id, ul); const fc = ul[cw.id]?.[m.id]?.forecast_qty||0; if (!av||!fc) return false; return Math.abs((fc-av)/av) >= 0.25; });
     branchAlerts[br.id] = ha ? "alert" : hf ? "warn" : "";
   });
-
-  const { bw, bMats, ul, bOrds, bLines, curIdx, stockMap } = getBranchData(branch);
+  const { bw, curIdx } = getBranchData(branch);
   const curWk = bw[curIdx];
 
-  // Build tab content
+  const shell = document.getElementById("shell");
+  // Only re-render shell if it doesn't exist yet (avoids resetting scroll)
+  if (!shell) {
+    document.getElementById("root").innerHTML = `
+      <div class="header" id="shell">
+        <div class="header-top">
+          <div class="app-title">📦 Raw Materials</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <div class="week-badge" id="week-badge"></div>
+            <button class="refresh-btn" onclick="load()">↻</button>
+          </div>
+        </div>
+        <div class="branch-tabs" id="branch-tabs"></div>
+      </div>
+      <div class="nav-tabs" id="nav-tabs"></div>
+      <div class="content" id="content"></div>
+    `;
+  }
+
+  // Always update week badge
+  const wb = document.getElementById("week-badge");
+  if (wb) wb.textContent = curWk ? `Wk ${curWk.week_number} · w/e ${fmtDate(curWk.week_ending)}` : "";
+
+  // Update branch tabs
+  const bt = document.getElementById("branch-tabs");
+  if (bt) bt.innerHTML = branches.map(br => `
+    <button class="branch-tab ${br.id === branch.id ? "active" : branchAlerts[br.id]}" onclick="setBranch(${JSON.stringify(br).replace(/"/g,'&quot;')})">
+      ${br.name}
+      ${branchAlerts[br.id] === "alert" ? '<span class="dot" style="background:#ef4444"></span>' : ""}
+      ${branchAlerts[br.id] === "warn" ? '<span class="dot" style="background:#f59e0b"></span>' : ""}
+    </button>`).join("");
+
+  // Update nav tabs
+  const nt = document.getElementById("nav-tabs");
+  if (nt) nt.innerHTML = `
+    <div class="nav-tab ${tab==="status"?"active":""}" onclick="setTab('status')">Status</div>
+    <div class="nav-tab ${tab==="log"?"active":""}" onclick="setTab('log')">Log</div>
+  `;
+}
+
+function render() {
+  const root = document.getElementById("root");
+  if (state.loading) { root.innerHTML = '<div class="loading">Loading…</div>'; return; }
+  if (state.error) { root.innerHTML = `<div class="loading" style="color:#f87171">Error: ${state.error}</div>`; return; }
+
+  renderShell();
+
+  const { branch, tab } = state;
+  const { bw, bMats, ul, bOrds, bLines, curIdx, stockMap } = getBranchData(branch);
+
   let content = "";
-  if (tab === "status") content = renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch: branch });
+  if (tab === "status") content = renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch });
   else if (tab === "log") content = renderLog({ bw, bMats, ul, curIdx, stockMap });
 
-  root.innerHTML = `
-    <div class="header">
-      <div class="header-top">
-        <div class="app-title">📦 Raw Materials</div>
-        <div style="display:flex;gap:8px;align-items:center">
-          ${curWk ? `<div class="week-badge">Wk ${curWk.week_number} · w/e ${fmtDate(curWk.week_ending)}</div>` : ""}
-          <button class="refresh-btn" onclick="load()">↻</button>
-        </div>
-      </div>
-      <div class="branch-tabs">
-        ${branches.map(br => `
-          <button class="branch-tab ${br.id === branch.id ? "active" : branchAlerts[br.id]}" onclick="setBranch(${JSON.stringify(br).replace(/"/g,'&quot;')})">
-            ${br.name}
-            ${branchAlerts[br.id] === "alert" ? '<span class="dot" style="background:#ef4444"></span>' : ""}
-            ${branchAlerts[br.id] === "warn" ? '<span class="dot" style="background:#f59e0b"></span>' : ""}
-          </button>`).join("")}
-      </div>
-    </div>
-    <div class="nav-tabs">
-      <div class="nav-tab ${tab==="status"?"active":""}" onclick="setTab('status')">Status</div>
-      <div class="nav-tab ${tab==="log"?"active":""}" onclick="setTab('log')">Log</div>
-    </div>
-    <div class="content">${content}</div>
-  `;
+  const ct = document.getElementById("content");
+  if (ct) ct.innerHTML = content;
 }
 
 function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }) {
