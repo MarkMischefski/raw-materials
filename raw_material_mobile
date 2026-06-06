@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Raw Materials</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { background: #0d1117; color: #e6edf3; font-family: "Segoe UI", system-ui, sans-serif; font-size: 14px; color-scheme: dark; overscroll-behavior: none; }
+  :root {
+    --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --dim: #484f58;
+    --blue: #58a6ff; --green: #10b981; --amber: #f59e0b; --red: #f87171;
+    --critical: #ef4444; --low: #f59e0b;
+  }
+  #root { min-height: 100dvh; }
+  .loading { display: flex; align-items: center; justify-content: center; height: 100dvh; color: var(--muted); font-size: 13px; }
+  /* Header */
+  .header { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 12px 16px 0; }
+  .header-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .app-title { font-size: 15px; font-weight: 700; color: var(--text); }
+  .week-badge { font-size: 11px; color: var(--muted); background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 2px 8px; }
+  /* Branch tabs */
+  .branch-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none; }
+  .branch-tabs::-webkit-scrollbar { display: none; }
+  .branch-tab { flex-shrink: 0; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; font-weight: 600; cursor: pointer; background: transparent; color: var(--muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; transition: all 0.1s; }
+  .branch-tab.active { background: #1f6feb18; border-color: #1f6feb; color: var(--blue); }
+  .branch-tab.alert { border-color: #ef444440; color: var(--red); }
+  .branch-tab.warn { border-color: #f59e0b40; color: var(--amber); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  /* Nav tabs */
+  .nav-tabs { display: flex; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .nav-tab { flex: 1; padding: 10px 4px; text-align: center; font-size: 11px; font-weight: 600; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; }
+  .nav-tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+  /* Content */
+  .content { padding: 12px 12px 80px; }
+  /* Cards */
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+  .card-header { padding: 10px 12px; font-weight: 700; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+  /* Status grid */
+  .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat-tile { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .stat-tile.critical { border-color: #ef444440; background: #ef444408; }
+  .stat-tile.low { border-color: #f59e0b40; background: #f59e0b08; }
+  .stat-name { font-size: 11px; color: var(--muted); margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat-stock { font-size: 20px; font-weight: 800; }
+  .stat-stock.critical { color: var(--critical); }
+  .stat-stock.low { color: var(--low); }
+  .stat-stock.ok { color: var(--green); }
+  .stat-cover { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  /* Alert banner */
+  .alert-banner { border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; font-size: 12px; }
+  .alert-banner.red { background: #ef444411; border: 1px solid #ef444440; }
+  .alert-banner.amber { background: #f59e0b11; border: 1px solid #f59e0b44; }
+  .alert-title { font-weight: 700; margin-bottom: 6px; }
+  .alert-title.red { color: var(--critical); }
+  .alert-title.amber { color: var(--amber); }
+  .alert-row { margin-bottom: 3px; }
+  /* Log table */
+  .log-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { padding: 6px 8px; text-align: left; color: var(--muted); font-weight: 600; font-size: 10px; text-transform: uppercase; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 7px 8px; border-bottom: 1px solid #21262d22; white-space: nowrap; }
+  tr.current td { background: #1f6feb08; }
+  tr.future td { color: var(--muted); }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+  .pill.critical { background: #ef444422; color: var(--critical); }
+  .pill.low { background: #f59e0b22; color: var(--amber); }
+  /* Variance chips */
+  .var-chip { display: inline-block; padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 700; margin-left: 4px; }
+  .var-chip.over { background: #f9731622; color: #f97316; }
+  .var-chip.under { background: #60a5fa22; color: #60a5fa; }
+  /* Orders */
+  .order-card { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .order-card:last-child { border-bottom: none; }
+  .order-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
+  .order-po { font-weight: 700; font-size: 13px; }
+  .order-status { font-size: 11px; padding: 2px 7px; border-radius: 10px; font-weight: 600; }
+  .order-status.pending { background: #f59e0b22; color: var(--amber); }
+  .order-status.received { background: #10b98122; color: var(--green); }
+  .order-detail { font-size: 11px; color: var(--muted); }
+  /* Week header */
+  .week-header { font-size: 11px; color: var(--muted); padding: 6px 0 2px; font-weight: 600; }
+  /* Refresh btn */
+  .refresh-btn { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); padding: 4px 10px; font-size: 11px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="root"><div class="loading">Loading…</div></div>
+<script>
+const SUPABASE_URL = "https://jrpysikxibrbbellroid.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpycHlzaWt4aWJyYmJlbGxyb2lkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MDM0OTksImV4cCI6MjA5NjE3OTQ5OX0.6ffi5GLkjs6qQ3Oqks8c1niu7-yrqrIG5P5aWWSFlN0";
+const H = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" };
+
+const N = v => v == null || isNaN(+v) ? "—" : Number(v).toLocaleString();
+const fmtDate = s => { if (!s) return "—"; const d = new Date(s); return `${d.getDate()}/${d.getMonth()+1}`; };
+
+async function get(path) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: H });
+  return r.json();
+}
+
+async function getAll(path) {
+  const PAGE = 1000; let all = [], from = 0;
+  while (true) {
+    const sep = path.includes('?') ? '&' : '?';
+    const page = await fetch(`${SUPABASE_URL}/rest/v1/${path}${sep}limit=${PAGE}&offset=${from}`, { headers: H }).then(r => r.json());
+    all = all.concat(page);
+    if (page.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
+}
+
+function stockStatus(s, f) {
+  if (s == null) return null;
+  if (s < 0) return "critical";
+  const w = f > 0 ? s / f : 99;
+  if (w < 1) return "critical";
+  if (w < 2) return "low";
+  return "ok";
+}
+
+function avg6(weeks, wi, matId, ul) {
+  const past = [];
+  for (let j = wi - 1; j >= 0 && past.length < 6; j--) {
+    const v = ul[weeks[j].id]?.[matId]?.actual_qty;
+    if (v != null) past.push(v);
+  }
+  if (!past.length) return null;
+  return past.reduce((a, b) => a + b, 0) / past.length;
+}
+
+function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers) {
+  const res = {}; let prev = {};
+  bw.forEach((w, wi) => {
+    res[w.id] = {};
+    const pWEstr = wi > 0 ? bw[wi-1].week_ending : "2000-01-01";
+    const tWEstr = w.week_ending;
+    const nonFcst = (bOrds||[]).filter(o => !o.is_forecast);
+    const arrived = (bLines||[]).filter(l => {
+      if (nonFcst.length && !nonFcst.find(o => o.id === l.order_id)) return false;
+      const eta = (l.eta || bOrds.find(o => o.id === l.order_id)?.eta || "").slice(0,10);
+      return eta && eta > pWEstr && eta <= tWEstr;
+    });
+    mats.forEach(m => {
+      const u = (ul[w.id]||{})[m.id] || {};
+      const forecast = u.forecast_qty || 0;
+      const actual = u.actual_qty ?? null;
+      const usage = actual != null ? actual : forecast;
+      const opening = wi === 0 ? u.opening_stock ?? 0 : prev[m.id] ?? u.opening_stock ?? 0;
+      const arrQty = arrived.filter(l => l.material_id === m.id).reduce((s,l) => s+(+l.qty||0), 0);
+      const tIn  = (bTransfers||[]).filter(t => t.to_branch_id === w.branch_id && t.to_material_id === m.id && t.week_number === w.week_number).reduce((s,t) => s+(t.qty||0), 0);
+      const tOut = (bTransfers||[]).filter(t => t.from_branch_id === w.branch_id && t.from_material_id === m.id && t.week_number === w.week_number).reduce((s,t) => s+(t.qty||0), 0);
+      res[w.id][m.id] = opening - usage + arrQty + tIn - tOut;
+    });
+    mats.forEach(m => { prev[m.id] = res[w.id][m.id]; });
+  });
+  return res;
+}
+
+// ── App state ──────────────────────────────────────────────────────────────
+let state = { loading: true, error: null, branches: [], mats: [], matTypes: [], weeks: [], usage: [], orders: [], orderLines: [], transfers: [], branch: null, tab: "status" };
+
+async function load() {
+  try {
+    const [branches, mats, matTypes, weeks, usage, orders, orderLines, transfers] = await Promise.all([
+      get("branches?select=*&order=sort_order"),
+      get("materials?select=*&order=sort_order"),
+      get("material_types?select=*&order=sort_order").catch(() => []),
+      get("weeks?select=*&order=branch_id,week_number"),
+      getAll("usage?select=*"),
+      get("orders?select=*&order=eta"),
+      get("order_lines?select=*&order=order_id").catch(() => []),
+      get("transfers?select=*&order=created_at.desc&limit=50").catch(() => []),
+    ]);
+    state = { ...state, loading: false, error: null, branches, mats, matTypes, weeks, usage, orders, orderLines, transfers, branch: state.branch || branches[0] };
+    render();
+  } catch(e) {
+    state = { ...state, loading: false, error: e.message };
+    render();
+  }
+}
+
+function setBranch(br) { state.branch = br; state.tab = "status"; render(); }
+function setTab(t) { state.tab = t; render(); }
+
+// ── Computed helpers ───────────────────────────────────────────────────────
+function getBranchData(br) {
+  const { mats, matTypes, weeks, usage, orders, orderLines, transfers } = state;
+  const bw = weeks.filter(w => w.branch_id === br.id).sort((a,b) => a.week_number - b.week_number);
+  const bMats = mats.filter(m => m.branch_id === br.id).sort((a,b) => a.sort_order - b.sort_order);
+  const ul = {};
+  usage.filter(u => bw.some(w => w.id === u.week_id)).forEach(u => {
+    if (!ul[u.week_id]) ul[u.week_id] = {};
+    ul[u.week_id][u.material_id] = u;
+  });
+  const bOrds = orders.filter(o => o.branch_id === br.id);
+  const bLines = orderLines.filter(l => bOrds.some(o => o.id === l.order_id));
+  const bTransfers = transfers.filter(t => t.from_branch_id === br.id || t.to_branch_id === br.id);
+  // Find current week
+  const today = new Date().toISOString().slice(0,10);
+  let curIdx = bw.findIndex(w => w.week_ending >= today);
+  if (curIdx < 0) curIdx = bw.length - 1;
+  const stockMap = computeStocks(bw, ul, bOrds, bLines, bMats, bTransfers);
+  return { bw, bMats, ul, bOrds, bLines, bTransfers, curIdx, stockMap };
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────
+function render() {
+  const root = document.getElementById("root");
+  if (state.loading) { root.innerHTML = '<div class="loading">Loading…</div>'; return; }
+  if (state.error) { root.innerHTML = `<div class="loading" style="color:#f87171">Error: ${state.error}</div>`; return; }
+
+  const { branches, branch, tab } = state;
+
+  // Compute branch alert states for tabs
+  const branchAlerts = {};
+  branches.forEach(br => {
+    const { bw, bMats, ul, stockMap, curIdx } = getBranchData(br);
+    const cw = bw[curIdx];
+    if (!cw) return;
+    const ha = bMats.some(m => { const s = stockMap[cw.id]?.[m.id], f = ul[cw.id]?.[m.id]?.forecast_qty||0; const st = stockStatus(s,f); return st==="critical"||st==="low"; });
+    const hf = !ha && bMats.some(m => { const av = avg6(bw, curIdx, m.id, ul); const fc = ul[cw.id]?.[m.id]?.forecast_qty||0; if (!av||!fc) return false; return Math.abs((fc-av)/av) >= 0.25; });
+    branchAlerts[br.id] = ha ? "alert" : hf ? "warn" : "";
+  });
+
+  const { bw, bMats, ul, bOrds, bLines, curIdx, stockMap } = getBranchData(branch);
+  const curWk = bw[curIdx];
+
+  // Build tab content
+  let content = "";
+  if (tab === "status") content = renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch: branch });
+  else if (tab === "log") content = renderLog({ bw, bMats, ul, curIdx, stockMap });
+
+  root.innerHTML = `
+    <div class="header">
+      <div class="header-top">
+        <div class="app-title">📦 Raw Materials</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${curWk ? `<div class="week-badge">Wk ${curWk.week_number} · w/e ${fmtDate(curWk.week_ending)}</div>` : ""}
+          <button class="refresh-btn" onclick="load()">↻</button>
+        </div>
+      </div>
+      <div class="branch-tabs">
+        ${branches.map(br => `
+          <button class="branch-tab ${br.id === branch.id ? "active" : branchAlerts[br.id]}" onclick="setBranch(${JSON.stringify(br).replace(/"/g,'&quot;')})">
+            ${br.name}
+            ${branchAlerts[br.id] === "alert" ? '<span class="dot" style="background:#ef4444"></span>' : ""}
+            ${branchAlerts[br.id] === "warn" ? '<span class="dot" style="background:#f59e0b"></span>' : ""}
+          </button>`).join("")}
+      </div>
+    </div>
+    <div class="nav-tabs">
+      <div class="nav-tab ${tab==="status"?"active":""}" onclick="setTab('status')">Status</div>
+      <div class="nav-tab ${tab==="log"?"active":""}" onclick="setTab('log')">Log</div>
+    </div>
+    <div class="content">${content}</div>
+  `;
+}
+
+function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }) {
+  const curWk = bw[curIdx];
+  if (!curWk) return '<div style="color:var(--muted);padding:20px;text-align:center">No data</div>';
+
+  // Stock alerts
+  const alerts = bMats.map(m => {
+    const s = stockMap[curWk.id]?.[m.id], f = (ul[curWk.id]?.[m.id])?.forecast_qty||0;
+    return { m, s, f, st: stockStatus(s,f) };
+  }).filter(a => a.st==="critical"||a.st==="low");
+
+  // Forecast variance
+  const fcstAlerts = bMats.map(m => {
+    const av = avg6(bw, curIdx, m.id, ul);
+    const fc = ul[curWk.id]?.[m.id]?.forecast_qty||0;
+    if (!av||!fc) return null;
+    const pct = Math.round((fc-av)/av*100);
+    if (Math.abs(pct) < 25) return null;
+    return { m, fc, av, pct };
+  }).filter(Boolean);
+
+  // Stock tiles
+  const tiles = bMats.map(m => {
+    const s = stockMap[curWk.id]?.[m.id], f = (ul[curWk.id]?.[m.id])?.forecast_qty||0;
+    const st = stockStatus(s,f)||"ok";
+    const wks = s!=null&&f>0 ? (s/f).toFixed(1) : null;
+    return `<div class="stat-tile ${st==="ok"?"":st}">
+      <div class="stat-name">${m.name}</div>
+      <div class="stat-stock ${st}">${N(s)}</div>
+      <div class="stat-cover">${f ? `fc ${N(f)}/wk` : ""} ${wks ? `· ${wks} wks` : s!=null&&s<0?"· NEGATIVE":""}</div>
+    </div>`;
+  }).join("");
+
+  // Pending orders
+  const pendingOrds = bOrds.filter(o => !o.received && !o.is_forecast).sort((a,b) => (a.eta||"") < (b.eta||"") ? -1 : 1);
+  const ordHtml = pendingOrds.length ? pendingOrds.map(o => {
+    const lines = bLines.filter(l => l.order_id === o.id && +l.qty > 0);
+    const matLabels = lines.map(l => { const m = bMats.find(m => m.id === l.material_id); return (m?.name||"?")+` ${N(l.qty)}kg`; }).join(", ");
+    return `<div class="order-card">
+      <div class="order-top">
+        <div class="order-po">${o.po_ref||"No PO"} <span style="color:var(--muted);font-weight:400;font-size:11px">${o.supplier||""}</span></div>
+        <div class="order-status pending">Pending</div>
+      </div>
+      <div class="order-detail">${matLabels || `${N(o.qty)} kg`} · ETA ${fmtDate(o.eta)}</div>
+    </div>`;
+  }).join("") : '<div style="color:var(--muted);font-size:12px;padding:12px">No pending orders</div>';
+
+  return `
+    ${alerts.length ? `<div class="alert-banner red">
+      <div class="alert-title red">⚠ Stock Alerts</div>
+      ${alerts.map(a => { const wks=a.s!=null&&a.f>0?(a.s/a.f).toFixed(1):null; return `<div class="alert-row"><strong>${a.m.name}</strong>: ${N(a.s)} kg${wks?` — ${wks} wks`:a.s<0?" — NEGATIVE":""}</div>`; }).join("")}
+    </div>` : ""}
+    ${fcstAlerts.length ? `<div class="alert-banner amber">
+      <div class="alert-title amber">⚠ Forecast Variance</div>
+      ${fcstAlerts.map(a => `<div class="alert-row"><strong>${a.m.name}</strong>: ${N(a.fc)}/wk forecast vs ${N(Math.round(a.av))}/wk avg <span class="var-chip ${a.pct>0?"over":"under"}">${a.pct>0?"+":""}${a.pct}%</span></div>`).join("")}
+    </div>` : ""}
+    <div class="card">
+      <div class="card-header">Current Stock — Wk ${curWk.week_number}</div>
+      <div style="padding:10px 10px;"><div class="status-grid">${tiles}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header">Pending Orders</div>
+      ${ordHtml}
+    </div>
+  `;
+}
+
+function renderLog({ bw, bMats, ul, curIdx, stockMap }) {
+  const winS = Math.max(0, curIdx - 4);
+  const winE = Math.min(bw.length - 1, curIdx + 8);
+  const dispWks = bw.slice(winS, winE + 1);
+
+  const rows = dispWks.map(w => {
+    const wi = bw.indexOf(w);
+    const isCur = wi === curIdx, isFut = wi > curIdx;
+    const u = ul[w.id] || {};
+    return `<tr class="${isCur?"current":isFut?"future":""}">
+      <td style="font-weight:${isCur?800:400};color:${isCur?"#58a6ff":"inherit"}">${w.week_number}</td>
+      <td style="color:var(--muted)">${fmtDate(w.week_ending)}</td>
+      ${bMats.map(m => {
+        const a = u[m.id]?.actual_qty;
+        return `<td style="color:${a!=null?"inherit":"var(--dim)"}">${a!=null ? N(a) : isFut ? "<em style='font-size:10px'>est</em>" : "—"}</td>`;
+      }).join("")}
+      ${bMats.map(m => {
+        const s = stockMap[w.id]?.[m.id], f = u[m.id]?.forecast_qty||0, st = stockStatus(s,f);
+        const isHist = wi < curIdx;
+        return `<td style="color:${isHist?"var(--muted)":st==="critical"?"var(--critical)":st==="low"?"var(--low)":"var(--green)"};font-weight:${isHist?400:600}">
+          ${N(s)}${isFut?"<span style='color:var(--dim);font-size:10px'>~</span>":""}
+          ${!isHist&&(st==="critical"||st==="low")?`<span class="pill ${st}">${st}</span>`:""}
+        </td>`;
+      }).join("")}
+    </tr>`;
+  }).join("");
+
+  return `<div class="card">
+    <div class="log-scroll">
+      <table>
+        <thead><tr>
+          <th>Wk</th><th>W/E</th>
+          ${bMats.map(m=>`<th style="color:var(--text)">${m.name}<br><span style="font-weight:400;text-transform:none;color:var(--muted)">Actual</span></th>`).join("")}
+          ${bMats.map(m=>`<th style="color:var(--text)">${m.name}<br><span style="font-weight:400;text-transform:none;color:var(--muted)">Stock</span></th>`).join("")}
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// Init
+load();
+</script>
+</body>
+</html>
