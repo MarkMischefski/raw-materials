@@ -152,7 +152,8 @@ function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers) {
       const arrQty = arrived.filter(l => l.material_id === m.id).reduce((s,l) => s+(+l.qty||0), 0);
       const tIn  = (bTransfers||[]).filter(t => t.to_branch_id === w.branch_id && t.to_material_id === m.id && t.week_number === w.week_number).reduce((s,t) => s+(t.qty||0), 0);
       const tOut = (bTransfers||[]).filter(t => t.from_branch_id === w.branch_id && t.from_material_id === m.id && t.week_number === w.week_number).reduce((s,t) => s+(t.qty||0), 0);
-      res[w.id][m.id] = opening - usage + arrQty + tIn - tOut;
+      const calculated = opening - usage + arrQty + tIn - tOut;
+      res[w.id][m.id] = u.closing_stock != null ? u.closing_stock : calculated;
     });
     mats.forEach(m => { prev[m.id] = res[w.id][m.id]; });
   });
@@ -275,7 +276,7 @@ function render() {
 
   let content = "";
   if (tab === "status") content = renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch });
-  else if (tab === "log") content = renderLog({ bw, bMats, ul, curIdx, stockMap });
+  else if (tab === "log") content = renderLog({ bw, bMats, ul, curIdx, stockMap, showFcst: state.showFcst });
 
   const ct = document.getElementById("content");
   if (ct) ct.innerHTML = content;
@@ -347,7 +348,7 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
   `;
 }
 
-function renderLog({ bw, bMats, ul, curIdx, stockMap }) {
+function renderLog({ bw, bMats, ul, curIdx, stockMap, showFcst }) {
   const winS = Math.max(0, curIdx - 4);
   const winE = Math.min(bw.length - 1, curIdx + 8);
   const dispWks = bw.slice(winS, winE + 1);
@@ -359,6 +360,10 @@ function renderLog({ bw, bMats, ul, curIdx, stockMap }) {
     return `<tr class="${isCur?"current":isFut?"future":""}">
       <td style="font-weight:${isCur?800:400};color:${isCur?"#58a6ff":"inherit"}">${w.week_number}</td>
       <td style="color:var(--muted)">${fmtDate(w.week_ending)}</td>
+      ${showFcst ? bMats.map(m => {
+        const fc = u[m.id]?.forecast_qty ?? 0;
+        return `<td style="color:var(--muted)">${N(fc)}</td>`;
+      }).join("") : ""}
       ${bMats.map(m => {
         const a = u[m.id]?.actual_qty;
         return `<td style="color:${a!=null?"inherit":"var(--dim)"}">${a!=null ? N(a) : isFut ? "<em style='font-size:10px'>est</em>" : "—"}</td>`;
@@ -374,13 +379,19 @@ function renderLog({ bw, bMats, ul, curIdx, stockMap }) {
     </tr>`;
   }).join("");
 
-  return `<div class="card">
+  return `<div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+    <button class="refresh-btn" onclick="state.showFcst=!state.showFcst;render()" style="font-size:11px">
+      ${showFcst ? 'Hide Forecast' : 'Show Forecast'}
+    </button>
+  </div>
+  <div class="card">
     <div class="log-scroll">
       <table>
         <thead><tr>
           <th>Wk</th><th>W/E</th>
-          ${bMats.map(m=>`<th style="color:var(--text)">${m.name}<br><span style="font-weight:400;text-transform:none;color:var(--muted)">Actual</span></th>`).join("")}
-          ${bMats.map(m=>`<th style="color:var(--text)">${m.name}<br><span style="font-weight:400;text-transform:none;color:var(--muted)">Stock</span></th>`).join("")}
+          ${showFcst ? bMats.map(m=>`<th><div style="font-weight:700;color:var(--text);font-size:11px">${m.name}</div><div style="font-weight:400;color:var(--muted);font-size:9px;text-transform:none">Forecast</div></th>`).join("") : ""}
+          ${bMats.map(m=>`<th><div style="font-weight:700;color:var(--text);font-size:11px">${m.name}</div><div style="font-weight:400;color:var(--muted);font-size:9px;text-transform:none">Actual</div></th>`).join("")}
+          ${bMats.map(m=>`<th><div style="font-weight:700;color:var(--text);font-size:11px">${m.name}</div><div style="font-weight:400;color:var(--muted);font-size:9px;text-transform:none">Stock</div></th>`).join("")}
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
