@@ -223,6 +223,19 @@ function renderShell() {
   });
   const { bw, curIdx } = getBranchData(branch);
   const curWk = bw[curIdx];
+  // Count all alerts across all branches for dot indicator
+  const allAlertCount = branches.reduce((n, br) => {
+    const { bw: bw2, bMats, ul: ul2, stockMap: sm2, curIdx: ci2 } = getBranchData(br);
+    const cw2 = bw2[ci2];
+    if (!cw2) return n;
+    const ha = bMats.some(m => { const s = sm2[cw2.id]?.[m.id], f = ul2[cw2.id]?.[m.id]?.forecast_qty||0; const st = stockStatus(s,f); return st==="critical"||st==="low"; });
+    const today = new Date().toISOString().slice(0,10);
+    const ords = state.orders.filter(o => o.branch_id === br.id);
+    const lines = state.orderLines.filter(l => ords.some(o => o.id === l.order_id));
+    const overdue = ords.some(o => { if (o.received || o.is_forecast) return false; const eta = (o.eta||"").slice(0,10); return eta && eta < today; }) ||
+                    lines.some(l => { if (l.received) return false; const eta = (l.eta || ords.find(o=>o.id===l.order_id)?.eta||"").slice(0,10); return eta && eta < today; });
+    return n + (ha ? 1 : 0) + (overdue ? 1 : 0);
+  }, 0);
 
   const shell = document.getElementById("shell");
   // Only re-render shell if it doesn't exist yet (avoids resetting scroll)
@@ -259,6 +272,9 @@ function renderShell() {
   // Update nav tabs
   const nt = document.getElementById("nav-tabs");
   if (nt) nt.innerHTML = `
+    <div class="nav-tab ${tab==="alerts"?"active":""}" onclick="setTab('alerts')" style="position:relative">
+      Alerts${allAlertCount > 0 ? `<span style="position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:#ef4444;display:inline-block"></span>` : ""}
+    </div>
     <div class="nav-tab ${tab==="status"?"active":""}" onclick="setTab('status')">Status</div>
     <div class="nav-tab ${tab==="log"?"active":""}" onclick="setTab('log')">Log</div>
   `;
@@ -275,11 +291,131 @@ function render() {
   const { bw, bMats, ul, bOrds, bLines, curIdx, stockMap } = getBranchData(branch);
 
   let content = "";
-  if (tab === "status") content = renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch });
+  if (tab === "alerts") content = renderAlerts();
+  else if (tab === "status") content = renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch });
   else if (tab === "log") content = renderLog({ bw, bMats, ul, curIdx, stockMap, showFcst: state.showFcst });
 
   const ct = document.getElementById("content");
   if (ct) ct.innerHTML = content;
+}
+
+function renderAlerts() {
+  const today = new Date().toISOString().slice(0, 10);
+  const { branches, mats, weeks, usage, orders, orderLines, transfers } = state;
+  let html = '';
+
+  // ── Stock alerts across all branches ──────────────────────────
+  let stockAlerts = [];
+  let fcstAlerts = [];
+  let overdueOrders = [];
+
+  branches.forEach(br => {
+    const { bw, bMats, ul, stockMap, curIdx } = getBranchData(br);
+    const cw = bw[curIdx];
+    if (!cw) return;
+
+    // Stock alerts
+    bMats.forEach(m => {
+      const s = stockMap[cw.id]?.[m.id];
+      const f = ul[cw.id]?.[m.id]?.forecast_qty || 0;
+      const st = stockStatus(s, f);
+      if (st === 'critical' || st === 'low') {
+        const wks = s != null && f > 0 ? (s / f).toFixed(1) : null;
+        stockAlerts.push({ br, m, s, f, st, wks });
+      }
+    });
+
+    // Forecast variance alerts
+    bMats.forEach(m => {
+      const av = avg6(bw, curIdx + 1, m.id, ul);
+      const fc = ul[cw.id]?.[m.id]?.forecast_qty ?? 0;
+      if (!av) return;
+      const pct = Math.round((fc - av) / av * 100);
+      if (Math.abs(pct) >= 25) fcstAlerts.push({ br, m, fc, av, pct });
+    });
+
+    // Overdue orders
+    const bOrds = orders.filter(o => o.branch_id === br.id);
+    const bLines = orderLines.filter(l => bOrds.some(o => o.id === l.order_id));
+    bOrds.forEach(o => {
+      if (o.received || o.is_forecast) return;
+      const oLines = bLines.filter(l => l.order_id === o.id);
+      if (oLines.length) {
+        oLines.forEach(l => {
+          if (l.received) return;
+          const eta = (l.eta || o.eta || '').slice(0, 10);
+          if (eta && eta < today) {
+            if (!overdueOrders.find(x => x.order.id === o.id)) {
+              overdueOrders.push({ br, order: o, lines: oLines });
+            }
+          }
+        });
+      } else {
+        const eta = (o.eta || '').slice(0, 10);
+        if (eta && eta < today) overdueOrders.push({ br, order: o, lines: [] });
+      }
+    });
+  });
+
+  // ── Overdue Orders ──────────────────────────────────────────────
+  if (overdueOrders.length) {
+    html += `<div class="alert-banner red" style="margin-bottom:10px">
+      <div class="alert-title red">⚠ Overdue Orders (${overdueOrders.length})</div>
+      ${overdueOrders.map(({ br, order: o, lines }) => {
+        const bestEta = lines.length ? lines.map(l=>l.eta).filter(Boolean).sort()[0] : o.eta;
+        const matLabels = lines.length
+          ? [...new Set(lines.map(l => { const m = mats.find(m=>m.id===l.material_id); return m?.name||'?'; }))].join(', ')
+          : `${N(o.qty)} kg`;
+        return `<div class="alert-row" style="padding:6px 0;border-bottom:1px solid #ef444422">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <span style="font-weight:700;color:#e6edf3">${br.name}</span>
+            <span style="font-size:10px;color:#f87171">ETA ${fmtDate(bestEta)}</span>
+          </div>
+          <div style="font-size:11px;color:#fca5a5">${o.po_ref ? `PO ${o.po_ref}` : 'No PO'} · ${o.supplier||'—'} · ${matLabels}</div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  // ── Stock Alerts ────────────────────────────────────────────────
+  if (stockAlerts.length) {
+    html += `<div class="alert-banner red" style="margin-bottom:10px">
+      <div class="alert-title red">🔴 Stock Alerts (${stockAlerts.length})</div>
+      ${stockAlerts.map(({ br, m, s, st, wks }) => `
+        <div class="alert-row" style="padding:5px 0;border-bottom:1px solid #ef444422">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span><strong style="color:#e6edf3">${br.name}</strong> <span style="color:#8b949e">·</span> <span style="color:#fca5a5">${m.name}</span></span>
+            <span class="pill ${st}">${st}</span>
+          </div>
+          <div style="font-size:11px;color:#8b949e">${N(s)} kg${wks ? ` · ${wks} wks cover` : s < 0 ? ' · NEGATIVE' : ''}</div>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  // ── Forecast Variance ───────────────────────────────────────────
+  if (fcstAlerts.length) {
+    html += `<div class="alert-banner amber" style="margin-bottom:10px">
+      <div class="alert-title amber">⚠ Forecast Variance >25% (${fcstAlerts.length})</div>
+      ${fcstAlerts.map(({ br, m, fc, av, pct }) => `
+        <div class="alert-row" style="padding:5px 0;border-bottom:1px solid #f59e0b22">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span><strong style="color:#e6edf3">${br.name}</strong> · <span style="color:#fbbf24">${m.name}</span></span>
+            <span class="var-chip ${pct>0?'over':'under'}">${pct>0?'+':''}${pct}%</span>
+          </div>
+          <div style="font-size:11px;color:#8b949e">Forecast ${N(fc)}/wk · 6wk avg ${N(Math.round(av))}/wk</div>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  if (!stockAlerts.length && !fcstAlerts.length && !overdueOrders.length) {
+    html += `<div style="text-align:center;padding:40px 20px;color:var(--muted)">
+      <div style="font-size:32px;margin-bottom:12px">✅</div>
+      <div style="font-weight:700;color:var(--text);margin-bottom:4px">All Clear</div>
+      <div style="font-size:12px">No stock alerts, overdue orders or forecast variances</div>
+    </div>`;
+  }
+
+  return html;
 }
 
 function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }) {
