@@ -109,7 +109,9 @@
   /* Week header */
   .week-header { font-size: 11px; color: var(--muted); padding: 6px 0 2px; font-weight: 600; }
   /* Refresh btn */
-  .refresh-btn { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); padding: 4px 10px; font-size: 11px; cursor: pointer; }
+  .refresh-btn { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); padding: 4px 10px; font-size: 11px; cursor: pointer; transition: opacity 0.2s; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .refresh-btn.spinning { animation: spin 0.8s linear infinite; opacity: 0.5; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -190,7 +192,14 @@ function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers) {
 // ── App state ──────────────────────────────────────────────────────────────
 let state = { loading: true, error: null, branches: [], mats: [], matTypes: [], weeks: [], usage: [], orders: [], orderLines: [], transfers: [], branch: null, tab: 'alerts' };
 
-async function load() {
+async function doRefresh(btn) {
+  if (btn) { btn.classList.add('spinning'); }
+  await load(true);
+  if (btn) { btn.classList.remove('spinning'); }
+}
+
+async function load(isRefresh) {
+  if (!isRefresh) { state.loading = true; render(); }
   try {
     const [branches, mats, matTypes, weeks, usage, orders, orderLines, transfers] = await Promise.all([
       get("branches?select=*&order=sort_order"),
@@ -273,7 +282,7 @@ function renderShell() {
           <div class="app-title">📦 Raw Materials</div>
           <div style="display:flex;gap:8px;align-items:center">
             <div class="week-badge" id="week-badge"></div>
-            <button class="refresh-btn" onclick="load()">↻</button>
+            <button class="refresh-btn" id="refresh-btn" onclick="doRefresh(this)">↻</button>
           </div>
         </div>
         <div class="branch-tabs" id="branch-tabs"></div>
@@ -563,7 +572,7 @@ function renderLog({ bw, bMats, ul, curIdx, stockMap, showFcst }) {
 }
 
 // Init
-load();
+load(false);
 </script>
 </body>
 </html>
