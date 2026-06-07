@@ -389,9 +389,9 @@ function renderLog({ bw, bMats, ul, curIdx, stockMap, showFcst }) {
       <table>
         <thead><tr>
           <th>Wk</th><th>W/E</th>
-          ${showFcst ? bMats.map(m=>`<th><div style="font-weight:700;color:var(--text);font-size:11px">${m.name}</div><div style="font-weight:400;color:var(--muted);font-size:9px;text-transform:none">Forecast</div></th>`).join("") : ""}
-          ${bMats.map(m=>`<th><div style="font-weight:700;color:var(--text);font-size:11px">${m.name}</div><div style="font-weight:400;color:var(--muted);font-size:9px;text-transform:none">Actual</div></th>`).join("")}
-          ${bMats.map(m=>`<th><div style="font-weight:700;color:var(--text);font-size:11px">${m.name}</div><div style="font-weight:400;color:var(--muted);font-size:9px;text-transform:none">Stock</div></th>`).join("")}
+          ${showFcst ? bMats.map(m=>`<th style="white-space:nowrap"><strong>${m.name}</strong><br><span style="font-weight:400;font-size:9px;color:var(--muted)">Forecast</span></th>`).join("") : ""}
+          ${bMats.map(m=>`<th style="white-space:nowrap"><strong>${m.name}</strong><br><span style="font-weight:400;font-size:9px;color:var(--muted)">Actual</span></th>`).join("")}
+          ${bMats.map(m=>`<th style="white-space:nowrap"><strong>${m.name}</strong><br><span style="font-weight:400;font-size:9px;color:var(--muted)">Stock</span></th>`).join("")}
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
