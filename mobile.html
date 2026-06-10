@@ -520,7 +520,7 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
           wksToOrder = ((new Date(nextEta)-new Date(curWk.week_ending))/(7*24*60*60*1000)).toFixed(1);
         }
         const ov = wksToOrder!=null && +wksToOrder<=0;
-        const poColor = ov ? '#f87171' : +wksToOrder<=+wks ? '#f59e0b' : '#10b981';
+        const poColor = ov ? '#f87171' : +wksToOrder>+wks ? '#f59e0b' : '#10b981';
         const poText = wksToOrder!=null
           ? (nextOrd&&nextOrd.po_ref ? nextOrd.po_ref+' ' : '') + (ov ? 'overdue' : 'due in '+wksToOrder+' wks')
           : '⚠ no order';
