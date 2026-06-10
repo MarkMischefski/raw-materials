@@ -256,7 +256,7 @@ function renderShell() {
     const cw = bw[curIdx];
     if (!cw) return;
     const ha = bMats.some(m => { const s = stockMap[cw.id]?.[m.id], f = ul[cw.id]?.[m.id]?.forecast_qty||0; const st = stockStatus(s,f); return st==="critical"||st==="low"; });
-    const hf = !ha && bMats.some(m => { const av = avg6(bw, curIdx, m.id, ul); const fc = ul[cw.id]?.[m.id]?.forecast_qty||0; if (!av||!fc) return false; return Math.abs((fc-av)/av) >= 0.25; });
+    const hf = !ha && bMats.some(m => { const av = avg6(bw, curIdx + 1, m.id, ul); const fc = ul[cw.id]?.[m.id]?.forecast_qty||0; if (!av||!fc) return false; return Math.abs((fc-av)/av) >= 0.25; });
     branchAlerts[br.id] = ha ? "alert" : hf ? "warn" : "";
   });
   const { bw, curIdx } = getBranchData(branch);
@@ -513,7 +513,10 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
         <div class="order-po">${o.po_ref||"No PO"} <span style="color:var(--muted);font-weight:400;font-size:11px">${o.supplier||""}</span></div>
         <div class="order-status ${(() => { const e=(lines.length?lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0]:o.eta||'').slice(0,10); return e&&e<new Date().toISOString().slice(0,10)?'overdue':'pending'; })()}">${(() => { const e=(lines.length?lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0]:o.eta||'').slice(0,10); return e&&e<new Date().toISOString().slice(0,10)?'Overdue':'Pending'; })()}</div>
       </div>
-      <div class="order-detail">${matLabels || `${N(o.qty)} kg`} · ETA ${fmtDate(o.eta)}</div>
+      <div class="order-detail">${matLabels || `${N(o.qty)} kg`} · ETA ${(() => {
+          const bestEta = lines.length ? lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0] : o.eta;
+          return fmtDate(bestEta);
+        })()}</div>
     </div>`;
   }).join("") : '<div style="color:var(--muted);font-size:12px;padding:12px">No pending orders</div>';
 
