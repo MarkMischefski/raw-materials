@@ -241,8 +241,7 @@ function getBranchData(br) {
   const today = new Date().toISOString().slice(0,10);
   let curIdx = bw.findIndex(w => w.week_ending >= today);
   if (curIdx < 0) curIdx = bw.length - 1;
-  if (curIdx > 0) curIdx = curIdx - 1;
-  // Show previous week as "current" for review purposes
+  // Step back one to show previous completed week
   if (curIdx > 0) curIdx = curIdx - 1;
   const stockMap = computeStocks(bw, ul, bOrds, bLines, bMats, bTransfers);
   return { bw, bMats, ul, bOrds, bLines, bTransfers, curIdx, stockMap };
