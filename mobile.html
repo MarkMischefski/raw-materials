@@ -104,6 +104,7 @@
   .order-po { font-weight: 700; font-size: 13px; }
   .order-status { font-size: 11px; padding: 2px 7px; border-radius: 10px; font-weight: 600; }
   .order-status.pending { background: #f59e0b22; color: var(--amber); }
+  .order-status.overdue { background: #ef444422; color: var(--red); font-weight: 700; }
   .order-status.received { background: #10b98122; color: var(--green); }
   .order-detail { font-size: 11px; color: var(--muted); }
   /* Week header */
@@ -358,7 +359,18 @@ function renderAlerts() {
       const st = stockStatus(s, f);
       if (st === 'critical' || st === 'low') {
         const wks = s != null && f > 0 ? (s / f).toFixed(1) : null;
-        stockAlerts.push({ br, m, s, f, st, wks });
+        const bOrds2 = state.orders.filter(o=>o.branch_id===br.id&&!o.received&&!o.is_forecast);
+        const bLines2 = state.orderLines.filter(l=>bOrds2.some(o=>o.id===l.order_id));
+        const matLines = bLines2.filter(l=>l.material_id===m.id&&!l.received);
+        const allEtas = [...matLines.map(l=>l.eta||bOrds2.find(o=>o.id===l.order_id)?.eta),
+          ...bOrds2.filter(o=>!bLines2.some(l=>l.order_id===o.id)).map(o=>o.eta)].filter(Boolean).sort();
+        const nextEta = allEtas[0];
+        const nextOrd = nextEta ? bOrds2.find(o=>o.eta===nextEta) : null;
+        let wksToOrder = null;
+        if (nextEta && cw) {
+          wksToOrder = ((new Date(nextEta)-new Date(cw.week_ending))/(7*24*60*60*1000)).toFixed(1);
+        }
+        stockAlerts.push({ br, m, s, f, st, wks, wksToOrder, nextOrd });
       }
     });
 
@@ -378,15 +390,10 @@ function renderAlerts() {
       if (o.received || o.is_forecast) return;
       const oLines = bLines.filter(l => l.order_id === o.id);
       if (oLines.length) {
-        oLines.forEach(l => {
-          if (l.received) return;
-          const eta = (l.eta || o.eta || '').slice(0, 10);
-          if (eta && eta < today) {
-            if (!overdueOrders.find(x => x.order.id === o.id)) {
-              overdueOrders.push({ br, order: o, lines: oLines });
-            }
-          }
-        });
+        const hasOverdue = oLines.some(l => !l.received && (l.eta||o.eta||'').slice(0,10) < today);
+        if (hasOverdue && !overdueOrders.find(x => x.order.id === o.id)) {
+          overdueOrders.push({ br, order: o, lines: oLines });
+        }
       } else {
         const eta = (o.eta || '').slice(0, 10);
         if (eta && eta < today) overdueOrders.push({ br, order: o, lines: [] });
@@ -418,14 +425,20 @@ function renderAlerts() {
   if (stockAlerts.length) {
     html += `<div class="alert-banner red" style="margin-bottom:10px">
       <div class="alert-title red">🔴 Stock Alerts (${stockAlerts.length})</div>
-      ${stockAlerts.map(({ br, m, s, st, wks }) => `
-        <div class="alert-row" style="padding:5px 0;border-bottom:1px solid #ef444422">
+      ${stockAlerts.map(({ br, m, s, st, wks, wksToOrder, nextOrd }) => {
+        const ov = wksToOrder!=null && +wksToOrder<=0;
+        const poColor = ov ? '#f87171' : wksToOrder!=null && +wksToOrder>+wks ? '#f59e0b' : '#10b981';
+        const poText = wksToOrder!=null
+          ? (nextOrd&&nextOrd.po_ref ? nextOrd.po_ref+' ' : '') + (ov ? 'overdue' : 'due in '+wksToOrder+' wks')
+          : '⚠ no order';
+        return `<div class="alert-row" style="padding:5px 0;border-bottom:1px solid #ef444422">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <span><strong style="color:#e6edf3">${br.name}</strong> <span style="color:#8b949e">·</span> <span style="color:#fca5a5">${m.name}</span></span>
+            <span><strong style="color:#e6edf3">${br.name}</strong> · <span style="color:#fca5a5">${m.name}</span></span>
             <span class="pill ${st}">${st}</span>
           </div>
-          <div style="font-size:11px;color:#8b949e">${N(s)} kg${wks ? ` · ${wks} wks cover` : s < 0 ? ' · NEGATIVE' : ''}</div>
-        </div>`).join('')}
+          <div style="font-size:11px;color:#8b949e">${wks ? wks+' wks cover' : s<0 ? 'NEGATIVE' : '—'} — <span style="color:${poColor}">${poText}</span></div>
+        </div>`;
+      }).join('')}
     </div>`;
   }
 
@@ -498,7 +511,7 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
     return `<div class="order-card">
       <div class="order-top">
         <div class="order-po">${o.po_ref||"No PO"} <span style="color:var(--muted);font-weight:400;font-size:11px">${o.supplier||""}</span></div>
-        <div class="order-status pending">Pending</div>
+        <div class="order-status ${(() => { const e=(lines.length?lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0]:o.eta||'').slice(0,10); return e&&e<new Date().toISOString().slice(0,10)?'overdue':'pending'; })()}">${(() => { const e=(lines.length?lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0]:o.eta||'').slice(0,10); return e&&e<new Date().toISOString().slice(0,10)?'Overdue':'Pending'; })()}</div>
       </div>
       <div class="order-detail">${matLabels || `${N(o.qty)} kg`} · ETA ${fmtDate(o.eta)}</div>
     </div>`;
