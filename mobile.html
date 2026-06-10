@@ -201,7 +201,7 @@ async function doRefresh(btn) {
 async function load(isRefresh) {
   if (!isRefresh) { state.loading = true; render(); }
   try {
-    const [branches, mats, matTypes, weeks, usage, orders, orderLines, transfers] = await Promise.all([
+    const [branches, mats, matTypes, weeks, usage, orders, orderLines, recon, transfers] = await Promise.all([
       get("branches?select=*&order=sort_order"),
       get("materials?select=*&order=sort_order"),
       get("material_types?select=*&order=sort_order").catch(() => []),
@@ -209,9 +209,10 @@ async function load(isRefresh) {
       getAll("usage?select=*"),
       get("orders?select=*&order=eta"),
       get("order_lines?select=*&order=order_id").catch(() => []),
+      get("stock_reconciliation?select=*&order=sync_date.desc&limit=500").catch(() => []),
       get("transfers?select=*&order=created_at.desc&limit=50").catch(() => []),
     ]);
-    state = { ...state, loading: false, error: null, branches, mats, matTypes, weeks, usage, orders, orderLines, transfers, branch: state.branch || branches[0] };
+    state = { ...state, loading: false, error: null, branches, mats, matTypes, weeks, usage, orders, orderLines, recon: recon||[], transfers, branch: state.branch || branches[0] };
     render();
   } catch(e) {
     state = { ...state, loading: false, error: e.message };
@@ -457,6 +458,7 @@ function renderAlerts() {
 function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }) {
   const curWk = bw[curIdx];
   if (!curWk) return '<div style="color:var(--muted);padding:20px;text-align:center">No data</div>';
+  const todayStr = new Date().toISOString().slice(0,10);
 
   // Stock alerts
   const alerts = bMats.map(m => {
@@ -464,23 +466,25 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
     return { m, s, f, st: stockStatus(s,f) };
   }).filter(a => a.st==="critical"||a.st==="low");
 
-  // Forecast variance
+  // Forecast variance (use curIdx+1 to match desktop)
   const fcstAlerts = bMats.map(m => {
-    const av = avg6(bw, curIdx, m.id, ul);
-    const fc = ul[curWk.id]?.[m.id]?.forecast_qty||0;
-    if (!av||!fc) return null;
+    const av = avg6(bw, curIdx + 1, m.id, ul);
+    const fc = ul[curWk.id]?.[m.id]?.forecast_qty ?? 0;
+    if (!av) return null;
     const pct = Math.round((fc-av)/av*100);
     if (Math.abs(pct) < 25) return null;
     return { m, fc, av, pct };
   }).filter(Boolean);
 
   // Stock tiles
+  const bRecon = (state.recon||[]).filter(r => r.branch_id === branch.id);
   const tiles = bMats.map(m => {
     const s = stockMap[curWk.id]?.[m.id], f = (ul[curWk.id]?.[m.id])?.forecast_qty||0;
     const st = stockStatus(s,f)||"ok";
     const wks = s!=null&&f>0 ? (s/f).toFixed(1) : null;
+    const wr = bRecon.find(r => r.material_id === m.id && r.week_id === curWk.id && r.variance != null && r.variance !== 0);
     return `<div class="stat-tile ${st==="ok"?"":st}">
-      <div class="stat-name">${m.name}</div>
+      <div class="stat-name">${m.name}${wr ? ' ⚡' : ''}</div>
       <div class="stat-stock ${st}">${N(s)}</div>
       <div class="stat-cover">${f ? `fc ${N(f)}/wk` : ""} ${wks ? `· ${wks} wks` : s!=null&&s<0?"· NEGATIVE":""}</div>
     </div>`;
@@ -503,7 +507,26 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
   return `
     ${alerts.length ? `<div class="alert-banner red">
       <div class="alert-title red">⚠ Stock Alerts</div>
-      ${alerts.map(a => { const wks=a.s!=null&&a.f>0?(a.s/a.f).toFixed(1):null; return `<div class="alert-row"><strong>${a.m.name}</strong>: ${N(a.s)} kg${wks?` — ${wks} wks`:a.s<0?" — NEGATIVE":""}</div>`; }).join("")}
+      ${alerts.map(a => {
+        const wks = a.s!=null&&a.f>0 ? (a.s/a.f).toFixed(1) : null;
+        const matOrds = bOrds.filter(o=>!o.received&&!o.is_forecast);
+        const matLines = bLines.filter(l=>l.material_id===a.m.id&&!l.received&&matOrds.some(o=>o.id===l.order_id));
+        const allEtas = [...matLines.map(l=>l.eta||matOrds.find(o=>o.id===l.order_id)?.eta),
+          ...matOrds.filter(o=>!bLines.some(l=>l.order_id===o.id)).map(o=>o.eta)].filter(Boolean).sort();
+        const nextEta = allEtas[0];
+        const nextOrd = nextEta ? matOrds.find(o=>o.eta===nextEta) : null;
+        let wksToOrder = null;
+        if (nextEta && curWk) {
+          wksToOrder = ((new Date(nextEta)-new Date(curWk.week_ending))/(7*24*60*60*1000)).toFixed(1);
+        }
+        const ov = wksToOrder!=null && +wksToOrder<=0;
+        const poColor = ov ? '#f87171' : +wksToOrder<=+wks ? '#f59e0b' : '#10b981';
+        const poText = wksToOrder!=null
+          ? (nextOrd&&nextOrd.po_ref ? nextOrd.po_ref+' ' : '') + (ov ? 'overdue' : 'due in '+wksToOrder+' wks')
+          : '⚠ no order';
+        const poStyle = wksToOrder!=null ? `color:${poColor}` : 'color:#ef4444;font-weight:700';
+        return `<div class="alert-row"><strong>${a.m.name}</strong>: ${wks?wks+' wks cover':a.s<0?'NEGATIVE':'—'} — <span style="${poStyle}">${poText}</span></div>`;
+      }).join("")}
     </div>` : ""}
     ${fcstAlerts.length ? `<div class="alert-banner amber">
       <div class="alert-title amber">⚠ Forecast Variance</div>
