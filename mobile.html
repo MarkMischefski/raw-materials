@@ -237,10 +237,11 @@ function getBranchData(br) {
   const bOrds = orders.filter(o => o.branch_id === br.id);
   const bLines = orderLines.filter(l => bOrds.some(o => o.id === l.order_id));
   const bTransfers = transfers.filter(t => t.from_branch_id === br.id || t.to_branch_id === br.id);
-  // Find current week
+  // Find current week — step back one to show previous completed week (matches desktop)
   const today = new Date().toISOString().slice(0,10);
   let curIdx = bw.findIndex(w => w.week_ending >= today);
   if (curIdx < 0) curIdx = bw.length - 1;
+  if (curIdx > 0) curIdx = curIdx - 1;
   // Show previous week as "current" for review purposes
   if (curIdx > 0) curIdx = curIdx - 1;
   const stockMap = computeStocks(bw, ul, bOrds, bLines, bMats, bTransfers);
