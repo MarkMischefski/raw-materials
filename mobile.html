@@ -202,7 +202,7 @@ async function doRefresh(btn) {
 async function load(isRefresh) {
   if (!isRefresh) { state.loading = true; render(); }
   try {
-    const [branches, mats, matTypes, weeks, usage, orders, orderLines, recon, transfers] = await Promise.all([
+    const [branches, mats, matTypes, weeks, usage, orders, orderLines, recon, erpPoLines, transfers] = await Promise.all([
       get("branches?select=*&order=sort_order"),
       get("materials?select=*&order=sort_order"),
       get("material_types?select=*&order=sort_order").catch(() => []),
@@ -211,9 +211,10 @@ async function load(isRefresh) {
       get("orders?select=*&order=eta"),
       get("order_lines?select=*&order=order_id").catch(() => []),
       get("stock_reconciliation?select=*&order=sync_date.desc&limit=500").catch(() => []),
+      get("erp_po_lines?select=*&order=synced_at.desc").catch(() => []),
       get("transfers?select=*&order=created_at.desc&limit=50").catch(() => []),
     ]);
-    state = { ...state, loading: false, error: null, branches, mats, matTypes, weeks, usage, orders, orderLines, recon: recon||[], transfers, branch: state.branch || branches[0] };
+    state = { ...state, loading: false, error: null, branches, mats, matTypes, weeks, usage, orders, orderLines, recon: recon||[], erpPoLines: erpPoLines||[], transfers, branch: state.branch || branches[0] };
     render();
   } catch(e) {
     state = { ...state, loading: false, error: e.message };
@@ -508,9 +509,18 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
   const ordHtml = pendingOrds.length ? pendingOrds.map(o => {
     const lines = bLines.filter(l => l.order_id === o.id && +l.qty > 0);
     const matLabels = lines.map(l => { const m = bMats.find(m => m.id === l.material_id); return (m?.name||"?")+` ${N(l.qty)}kg`; }).join(", ");
+    const erpMatch = (state.erpPoLines||[]).filter(l => String(l.hdr_seqno).trim()===String(o.po_ref).trim());
+    const hasErp = erpMatch.length > 0;
+    const supQ = erpMatch.reduce((s,l)=>s+(l.sup_quant||0),0);
+    const ordQ = erpMatch.reduce((s,l)=>s+(l.ord_quant||0),0);
+    const allSup = hasErp && supQ >= ordQ;
+    const partSup = hasErp && supQ > 0 && !allSup;
+    const erpBadge = hasErp
+      ? `<span style="font-size:10px;border-radius:3px;padding:1px 5px;background:${allSup?"#10b98122":partSup?"#f59e0b22":"#1f6feb22"};color:${allSup?"#10b981":partSup?"#f59e0b":"#58a6ff"}">${allSup?"✓ Sup":partSup?"⚡ Part":"✓ ERP"}</span>`
+      : o.po_ref ? `<span style="font-size:10px;border-radius:3px;padding:1px 5px;background:#ef444422;color:#f87171">⚠ No ERP</span>` : "";
     return `<div class="order-card">
       <div class="order-top">
-        <div class="order-po">${o.po_ref||"No PO"} <span style="color:var(--muted);font-weight:400;font-size:11px">${o.supplier||""}</span></div>
+        <div class="order-po">${o.po_ref||"No PO"} <span style="color:var(--muted);font-weight:400;font-size:11px">${o.supplier||""}</span> ${erpBadge}</div>
         <div class="order-status ${(() => { const e=(lines.length?lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0]:o.eta||'').slice(0,10); return e&&e<new Date().toISOString().slice(0,10)?'overdue':'pending'; })()}">${(() => { const e=(lines.length?lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0]:o.eta||'').slice(0,10); return e&&e<new Date().toISOString().slice(0,10)?'Overdue':'Pending'; })()}</div>
       </div>
       <div class="order-detail">${matLabels || `${N(o.qty)} kg`} · ETA ${(() => {
@@ -582,7 +592,11 @@ function renderLog({ bw, bMats, ul, curIdx, stockMap, showFcst }) {
       ${bMats.map(m => {
         const s = stockMap[w.id]?.[m.id], f = u[m.id]?.forecast_qty||0, st = stockStatus(s,f);
         const isHist = wi < curIdx;
-        return `<td style="color:${isHist?"var(--muted)":st==="critical"?"var(--critical)":st==="low"?"var(--low)":"var(--green)"};font-weight:${isHist?400:600}">
+        const pWEm = wi > 0 ? bw[wi-1].week_ending : "2000-01-01";
+        const hasRcptM = bLines.some(l => l.material_id===m.id && (l.eta||"").slice(0,10)>pWEm && (l.eta||"").slice(0,10)<=w.week_ending && bOrds.some(o=>o.id===l.order_id&&!o.is_forecast));
+        const hasPendM = !isHist && wi===curIdx && bLines.some(l => l.material_id===m.id && !l.received && (l.eta||"").slice(0,10)>pWEm && (l.eta||"").slice(0,10)<=w.week_ending && bOrds.some(o=>o.id===l.order_id&&!o.received&&!o.is_forecast));
+        const cellBgM = hasRcptM?"background:#10b98112;":hasPendM?"background:#ef444415;":"";
+        return `<td style="${cellBgM}color:${isHist?"var(--muted)":st==="critical"?"var(--critical)":st==="low"?"var(--low)":"var(--green)"};font-weight:${isHist?400:600}">
           ${N(s)}${isFut?"<span style='color:var(--dim);font-size:10px'>~</span>":""}
           ${!isHist&&(st==="critical"||st==="low")?`<span class="pill ${st}">${st}</span>`:""}
         </td>`;
