@@ -15141,11 +15141,12 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               !isHist && (st === "critical" || st === "low") && import_react.default.createElement(Pill, { status: st }),
               (() => {
                 const wr = bRecon && bRecon.find(r2 => r2.material_id === m.id && r2.week_id === w.id);
-                if (!wr || wr.variance === null || wr.variance === 0) return null;
+                if (!wr || wr.variance === null || (wr.variance === 0 && !(wr.notes && wr.notes.startsWith("Resolved")))) return null;
+                const isResolved = wr.notes && wr.notes.startsWith("Resolved");
                 return import_react.default.createElement("span", {
                   title: wr.notes || "",
-                  style: { marginLeft: 4, fontSize: 11, cursor: "help", color: Math.abs(wr.variance) > 1000 ? "#f59e0b" : "#8b949e" }
-                }, "\u26A1");
+                  style: { marginLeft: 4, fontSize: 11, cursor: "help", color: isResolved ? "#484f58" : Math.abs(wr.variance) > 1000 ? "#f59e0b" : "#8b949e" }
+                }, isResolved ? "\u2713" : "\u26A1");
               })()
             );
           }),
@@ -15210,10 +15211,10 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               ) : import_react.default.createElement("div", { style: { fontSize: 10, color: "#484f58", marginTop: 6 } }, "Admin only")
             ),
             (() => {
-              const weekRecons = (bRecon || []).filter(r => r.week_id === w.id && r.variance != null && r.variance !== 0);
+              const weekRecons = (bRecon || []).filter(r => r.week_id === w.id && (r.variance != null && r.variance !== 0 || (r.notes && r.notes.startsWith("Resolved"))));
               if (!weekRecons.length) return null;
               return import_react.default.createElement("div", { style: { flex: "0 0 auto", minWidth: 240, background: "#0a0f1a", borderRadius: 6, padding: "8px 10px", border: "1px solid #f59e0b33" } },
-                import_react.default.createElement("div", { style: { fontWeight: 700, color: "#f59e0b", fontSize: 11, marginBottom: 6 } }, "\u26A1 ERP Reconciliation"),
+                import_react.default.createElement("div", { style: { fontWeight: 700, color: weekRecons.every(r => r.notes && r.notes.startsWith("Resolved")) ? "#484f58" : "#f59e0b", fontSize: 11, marginBottom: 6 } }, weekRecons.every(r => r.notes && r.notes.startsWith("Resolved")) ? "\u2713 ERP Reconciled" : "\u26A1 ERP Reconciliation"),
                 weekRecons.map((r, ri) => {
                   const mat = mats.find(m2 => m2.id === r.material_id);
                   return import_react.default.createElement("div", { key: ri, style: { fontSize: 11, marginBottom: 6, borderBottom: ri < weekRecons.length-1 ? "1px solid #21262d" : "none", paddingBottom: ri < weekRecons.length-1 ? 6 : 0 } },
