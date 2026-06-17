@@ -593,9 +593,11 @@ function renderLog({ bw, bMats, ul, curIdx, stockMap, showFcst }) {
         const s = stockMap[w.id]?.[m.id], f = u[m.id]?.forecast_qty||0, st = stockStatus(s,f);
         const isHist = wi < curIdx;
         const pWEm = wi > 0 ? bw[wi-1].week_ending : "2000-01-01";
-        const hasRcptM = bLines.some(l => l.material_id===m.id && (l.eta||"").slice(0,10)>pWEm && (l.eta||"").slice(0,10)<=w.week_ending && bOrds.some(o=>o.id===l.order_id&&!o.is_forecast));
-        const hasPendM = !isHist && wi===curIdx && bLines.some(l => l.material_id===m.id && !l.received && (l.eta||"").slice(0,10)>pWEm && (l.eta||"").slice(0,10)<=w.week_ending && bOrds.some(o=>o.id===l.order_id&&!o.received&&!o.is_forecast));
-        const cellBgM = hasRcptM?"background:#10b98112;":hasPendM?"background:#ef444415;":"";
+        const hasRcptM = bLines.some(l => l.material_id===m.id && l.received && (l.eta||"").slice(0,10)>pWEm && (l.eta||"").slice(0,10)<=w.week_ending && bOrds.some(o=>o.id===l.order_id&&!o.is_forecast));
+        const todayM = new Date().toISOString().slice(0,10);
+        const hasPendM = w.week_ending<=todayM && bLines.some(l => l.material_id===m.id && !l.received && (l.eta||"").slice(0,10)!=="" && (l.eta||"").slice(0,10)<=w.week_ending && bOrds.some(o=>o.id===l.order_id&&!o.received&&!o.is_forecast));
+        const hasFutPendM = isFut && bLines.some(l => l.material_id===m.id && !l.received && (l.eta||"").slice(0,10)!=="" && (l.eta||"").slice(0,10)>pWEm && (l.eta||"").slice(0,10)<=w.week_ending && bOrds.some(o=>o.id===l.order_id&&!o.received&&!o.is_forecast));
+        const cellBgM = hasRcptM?"background:#10b98130;":hasPendM?"background:#ef444430;":hasFutPendM?"background:#f59e0b25;":"";
         return `<td style="${cellBgM}color:${isHist?"var(--muted)":st==="critical"?"var(--critical)":st==="low"?"var(--low)":"var(--green)"};font-weight:${isHist?400:600}">
           ${N(s)}${isFut?"<span style='color:var(--dim);font-size:10px'>~</span>":""}
           ${!isHist&&(st==="critical"||st==="low")?`<span class="pill ${st}">${st}</span>`:""}
