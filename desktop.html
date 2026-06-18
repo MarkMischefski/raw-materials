@@ -12816,6 +12816,45 @@
     );
   }
   var SUPABASE_URL = "https://jrpysikxibrbbellroid.supabase.co";
+  var VAPID_PUBLIC_KEY = "BPBuQgiHsDB_kUmXmPyPTqx_tnICe2gisK7hwc0RVMPVqH2OrQa_W1xZrcFG_8dMNCtuUkg14FMsbCsx-yldjJc";
+  function subscribePush() {
+    return (async () => {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        alert("Push notifications are not supported on this browser."); return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { alert("Notification permission denied."); return; }
+      try {
+        const reg = await navigator.serviceWorker.register("sw.js");
+        await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          const appKey = Uint8Array.from(atob(VAPID_PUBLIC_KEY.replace(/-/g,"+").replace(/_/g,"/")), c=>c.charCodeAt(0));
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
+        }
+        const json = sub.toJSON();
+        const label = prompt("Label this device (optional):", navigator.userAgent.slice(0,40)) || "";
+        await fetch(SUPABASE_URL + "/rest/v1/push_subscriptions", {
+          method: "POST",
+          headers: { ...SB_HDRS, "Prefer": "resolution=merge-duplicates" },
+          body: JSON.stringify({ endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth, user_label: label })
+        });
+        alert("\u2705 Notifications enabled! You\'ll get alerts at 9am for overdue orders.");
+      } catch(e) { alert("Failed to subscribe: " + e.message); }
+    })();
+  }
+  function unsubscribePush() {
+    return (async () => {
+      if (!("serviceWorker" in navigator)) return;
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = await reg?.pushManager.getSubscription();
+      if (sub) {
+        await fetch(SUPABASE_URL + "/rest/v1/push_subscriptions?endpoint=eq." + encodeURIComponent(sub.endpoint), { method: "DELETE", headers: SB_HDRS });
+        await sub.unsubscribe();
+      }
+      alert("Notifications disabled.");
+    })();
+  }
   var SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpycHlzaWt4aWJyYmJlbGxyb2lkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MDM0OTksImV4cCI6MjA5NjE3OTQ5OX0.6ffi5GLkjs6qQ3Oqks8c1niu7-yrqrIG5P5aWWSFlN0";
   var SB_HDRS = {
     apikey: SUPABASE_KEY,
@@ -13378,7 +13417,8 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
         secBtn("types", "\u{1F3F7}\uFE0F Material Types"),
         secBtn("branch", "\u{1F3ED} Branch Materials"),
         secBtn("locations", "\u{1F4CD} Branch Locations"),
-        secBtn("suppliers", "\u{1F69A} Suppliers")
+        secBtn("suppliers", "\u{1F69A} Suppliers"),
+        secBtn("notifications", "\u{1F514} Notifications")
       ),
       // Material Types section
       section === "types" && import_react.default.createElement(
@@ -13451,6 +13491,14 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
       ),
       section === "locations" && import_react.default.createElement(BranchLocationsSettings, { branches, branchLocations, reload }),
       section === "suppliers" && import_react.default.createElement(SupplierSettings, { suppliers, reload }),
+      section === "notifications" && import_react.default.createElement("div", { style: { padding: "16px", background: "#161b22", borderRadius: 8, border: "1px solid #21262d", maxWidth: 480 } },
+        import_react.default.createElement("div", { style: { fontWeight: 700, color: "#e6edf3", marginBottom: 8, fontSize: 14 } }, "\u{1F514} Push Notifications"),
+        import_react.default.createElement("div", { style: { fontSize: 12, color: "#8b949e", marginBottom: 14, lineHeight: 1.6 } }, "Get a daily 9am NZT alert on this device for overdue orders and critical stock variances. iOS: add this app to your Home Screen first (Share \u2192 Add to Home Screen), then open it from there and enable below."),
+        import_react.default.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+          import_react.default.createElement("button", { style: { padding: "8px 16px", borderRadius: 6, border: "none", background: "#1f6feb", color: "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer" }, onClick: () => subscribePush() }, "\u2705 Enable on this device"),
+          import_react.default.createElement("button", { style: { padding: "8px 16px", borderRadius: 6, border: "1px solid #30363d", background: "none", color: "#8b949e", fontSize: 12, cursor: "pointer" }, onClick: () => unsubscribePush() }, "\u274C Disable on this device")
+        )
+      ),
       // Branch Materials section
       section === "branch" && import_react.default.createElement(
         "div",
