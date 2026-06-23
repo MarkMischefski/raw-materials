@@ -122,6 +122,11 @@ const SUPABASE_URL = "https://jrpysikxibrbbellroid.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpycHlzaWt4aWJyYmJlbGxyb2lkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MDM0OTksImV4cCI6MjA5NjE3OTQ5OX0.6ffi5GLkjs6qQ3Oqks8c1niu7-yrqrIG5P5aWWSFlN0";
 const H = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" };
 
+function todayLocal() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
+
 const VAPID_PUBLIC_KEY = "BPBuQgiHsDB_kUmXmPyPTqx_tnICe2gisK7hwc0RVMPVqH2OrQa_W1xZrcFG_8dMNCtuUkg14FMsbCsx-yldjJc";
 
 async function isSubscribed() {
@@ -299,7 +304,7 @@ function getBranchData(br) {
   const bLines = orderLines.filter(l => bOrds.some(o => o.id === l.order_id));
   const bTransfers = transfers.filter(t => t.from_branch_id === br.id || t.to_branch_id === br.id);
   // Find current week — step back one to show previous completed week (matches desktop)
-  const today = new Date().toISOString().slice(0,10);
+  const today = todayLocal();
   let curIdx = bw.findIndex(w => w.week_ending >= today);
   if (curIdx < 0) curIdx = bw.length - 1;
   // Step back one to show previous completed week
@@ -328,7 +333,7 @@ function renderShell() {
     const cw2 = bw2[ci2];
     if (!cw2) return n;
     const ha = bMats.some(m => { const s = sm2[cw2.id]?.[m.id], f = ul2[cw2.id]?.[m.id]?.forecast_qty||0; const st = stockStatus(s,f); return st==="critical"||st==="low"; });
-    const today = new Date().toISOString().slice(0,10);
+    const today = todayLocal();
     const ords = state.orders.filter(o => o.branch_id === br.id);
     const lines = state.orderLines.filter(l => ords.some(o => o.id === l.order_id));
     const overdue = ords.some(o => { if (o.received || o.is_forecast) return false; const eta = (o.eta||"").slice(0,10); return eta && eta < today; }) ||
@@ -393,14 +398,14 @@ function render() {
   let content = "";
   if (tab === "alerts") content = renderAlerts();
   else if (tab === "status") content = renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch });
-  else if (tab === "log") content = renderLog({ bw, bMats, ul, curIdx, stockMap, showFcst: state.showFcst });
+  else if (tab === "log") content = renderLog({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, showFcst: state.showFcst });
 
   const ct = document.getElementById("content");
   if (ct) ct.innerHTML = content;
 }
 
 function renderAlerts() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const { branches, mats, weeks, usage, orders, orderLines, transfers } = state;
   let html = '';
 
@@ -533,7 +538,7 @@ function renderAlerts() {
 function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }) {
   const curWk = bw[curIdx];
   if (!curWk) return '<div style="color:var(--muted);padding:20px;text-align:center">No data</div>';
-  const todayStr = new Date().toISOString().slice(0,10);
+  const todayStr = todayLocal();
 
   // Stock alerts
   const alerts = bMats.map(m => {
@@ -582,7 +587,7 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
     return `<div class="order-card">
       <div class="order-top">
         <div class="order-po">${o.po_ref||"No PO"} <span style="color:var(--muted);font-weight:400;font-size:11px">${o.supplier||""}</span> ${erpBadge}</div>
-        <div class="order-status ${(() => { const e=(lines.length?lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0]:o.eta||'').slice(0,10); return e&&e<new Date().toISOString().slice(0,10)?'overdue':'pending'; })()}">${(() => { const e=(lines.length?lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0]:o.eta||'').slice(0,10); return e&&e<new Date().toISOString().slice(0,10)?'Overdue':'Pending'; })()}</div>
+        <div class="order-status ${(() => { const e=(lines.length?lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0]:o.eta||'').slice(0,10); return e&&e<todayLocal()?'overdue':'pending'; })()}">${(() => { const e=(lines.length?lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0]:o.eta||'').slice(0,10); return e&&e<todayLocal()?'Overdue':'Pending'; })()}</div>
       </div>
       <div class="order-detail">${matLabels || `${N(o.qty)} kg`} · ETA ${(() => {
           const bestEta = lines.length ? lines.map(l=>l.eta||o.eta).filter(Boolean).sort()[0] : o.eta;
@@ -630,7 +635,7 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
   `;
 }
 
-function renderLog({ bw, bMats, ul, curIdx, stockMap, showFcst }) {
+function renderLog({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, showFcst }) {
   const winS = Math.max(0, curIdx - 4);
   const winE = Math.min(bw.length - 1, curIdx + 8);
   const dispWks = bw.slice(winS, winE + 1);
@@ -655,7 +660,7 @@ function renderLog({ bw, bMats, ul, curIdx, stockMap, showFcst }) {
         const isHist = wi < curIdx;
         const pWEm = wi > 0 ? bw[wi-1].week_ending : "2000-01-01";
         const hasRcptM = bLines.some(l => l.material_id===m.id && l.received && (l.eta||"").slice(0,10)>pWEm && (l.eta||"").slice(0,10)<=w.week_ending && bOrds.some(o=>o.id===l.order_id&&!o.is_forecast));
-        const todayM = new Date().toISOString().slice(0,10);
+        const todayM = todayLocal();
         const hasPendM = w.week_ending<=todayM && bLines.some(l => l.material_id===m.id && !l.received && (l.eta||"").slice(0,10)!=="" && (l.eta||"").slice(0,10)<=w.week_ending && bOrds.some(o=>o.id===l.order_id&&!o.received&&!o.is_forecast));
         const hasFutPendM = isFut && bLines.some(l => l.material_id===m.id && !l.received && (l.eta||"").slice(0,10)!=="" && (l.eta||"").slice(0,10)>pWEm && (l.eta||"").slice(0,10)<=w.week_ending && bOrds.some(o=>o.id===l.order_id&&!o.received&&!o.is_forecast));
         const cellBgM = hasRcptM?"background:#10b98130;":hasPendM?"background:#ef444430;":hasFutPendM?"background:#f59e0b25;":"";
