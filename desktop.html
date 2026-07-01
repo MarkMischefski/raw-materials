@@ -14744,7 +14744,13 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
       });
       return map;
     }, [rawUsage, bw.length, branch.id]);
-    const stockMap = (0, import_react.useMemo)(() => computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers, curIdx), [bw.length, ul, bOrds.length, bLines2.length, mats.length, bTransfers.length]);
+    const stockMap = (0, import_react.useMemo)(() => computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers, (() => {
+        const t = todayLocal();
+        let ci = bw.findIndex(w => w.week_ending >= t);
+        if (ci < 0) ci = bw.length - 1;
+        if (ci > 0) ci--;
+        return ci;
+      })()), [bw.length, ul, bOrds.length, bLines2.length, mats.length, bTransfers.length]);
     const curIdx = (0, import_react.useMemo)(() => {
       const today = todayLocal();
       // Find the current week by date first
