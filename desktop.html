@@ -12927,8 +12927,11 @@
     if (!past.length) return null;
     return Math.round(past.reduce((s, v) => s + v, 0) / past.length / 100) * 100;
   }
-  function computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers) {
+  function computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers, curIdx) {
     if (!bw.length || !mats.length) return {};
+    // curIdx: weeks <= curIdx are "past" (use 0 for missing actuals), > curIdx are future (use forecast)
+    // Default to bw.length-1 so all weeks use 0-fallback if not provided (safe default)
+    if (curIdx === undefined) curIdx = bw.length - 1;
     const res = {};
     let prev = {};
     bw.forEach((w, wi) => {
@@ -14741,7 +14744,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
       });
       return map;
     }, [rawUsage, bw.length, branch.id]);
-    const stockMap = (0, import_react.useMemo)(() => computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers), [bw.length, ul, bOrds.length, bLines2.length, mats.length, bTransfers.length]);
+    const stockMap = (0, import_react.useMemo)(() => computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers, curIdx), [bw.length, ul, bOrds.length, bLines2.length, mats.length, bTransfers.length]);
     const curIdx = (0, import_react.useMemo)(() => {
       const today = todayLocal();
       // Find the current week by date first
@@ -16021,7 +16024,7 @@ setOrders(ords);
       let curIdx = bw.findIndex(w => w.week_ending >= todayStr2);
       if (curIdx < 0) curIdx = bw.length - 1;
       if (curIdx > 0) curIdx--;
-      const stockMap = computeStocks(bw, ul, bOrds, bLines2, mats);
+      const stockMap = computeStocks(bw, ul, bOrds, bLines2, mats, undefined, curIdx);
       const curWk = bw[curIdx];
       return { br, bw, mats, bOrds, bLines: bLines2, ul, stockMap, curIdx, curWk };
     }), [branches, allMats, allWeeks, rawUsage, orders, orderLines]);
