@@ -309,7 +309,7 @@ function getBranchData(br) {
   if (curIdx < 0) curIdx = bw.length - 1;
   // Step back one to show previous completed week
   if (curIdx > 0) curIdx = curIdx - 1;
-  const stockMap = computeStocks(bw, ul, bOrds, bLines, bMats, bTransfers);
+  const stockMap = computeStocks(bw, ul, bOrds, bLines, bMats, bTransfers, curIdx);
   return { bw, bMats, ul, bOrds, bLines, bTransfers, curIdx, stockMap };
 }
 
