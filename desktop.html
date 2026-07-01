@@ -12816,6 +12816,10 @@
     );
   }
   var SUPABASE_URL = "https://jrpysikxibrbbellroid.supabase.co";
+  function todayLocal() {
+    var d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+  }
   var VAPID_PUBLIC_KEY = "BPBuQgiHsDB_kUmXmPyPTqx_tnICe2gisK7hwc0RVMPVqH2OrQa_W1xZrcFG_8dMNCtuUkg14FMsbCsx-yldjJc";
   function subscribePush() {
     return (async () => {
@@ -12944,7 +12948,9 @@
         const u = (ul[w.id] || {})[m.id] || {};
         const forecast = u.forecast_qty || 0;
         const actual = u.actual_qty ?? null;
-        const usage = actual != null ? actual : forecast;
+        // Past/current weeks (wi <= curIdx): if no actual recorded, use 0 not forecast
+        // Future weeks (wi > curIdx): use forecast to project ahead
+        const usage = actual != null ? actual : (wi <= curIdx ? 0 : forecast);
         const opening = wi === 0 ? u.opening_stock ?? 0 : prev[m.id] ?? u.opening_stock ?? 0;
         const arrived = arrivedLines.filter((l) => l.material_id === m.id).reduce((s, l) => s + (l.qty || 0), 0);
         const unassigned = mats[0]?.id === m.id ? arrivedLines.filter((l) => !l.material_id).reduce((s, l) => s + (l.qty || 0), 0) : 0;
@@ -14737,7 +14743,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
     }, [rawUsage, bw.length, branch.id]);
     const stockMap = (0, import_react.useMemo)(() => computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers), [bw.length, ul, bOrds.length, bLines2.length, mats.length, bTransfers.length]);
     const curIdx = (0, import_react.useMemo)(() => {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayLocal();
       // Find the current week by date first
       let idx = bw.findIndex(w => w.week_ending >= today);
       if (idx < 0) idx = bw.length - 1;
@@ -15166,7 +15172,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                     bOrds.some(o => o.id === l.order_id && !o.is_forecast)
                   );
                   // Red if a pending order line is due on or before this week's end and not yet received
-                  const todayStr = new Date().toISOString().slice(0,10);
+                  const todayStr = todayLocal();
                   const hasPending = w.week_ending <= todayStr && bLines2.some(l =>
                     l.material_id === m.id && !l.received &&
                     (l.eta || "").slice(0,10) !== "" &&
@@ -15447,7 +15453,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               return etaKeys.length === 0 ? [import_react.default.createElement(
                 "tr",
                 { key: i, style: { borderBottom: "1px solid #21262d", opacity: o.received ? 0.6 : 1,
-                  background: !o.received && o.eta && o.eta.slice(0,10) < new Date().toISOString().slice(0,10) ? "#ef444408" : "transparent" } },
+                  background: !o.received && o.eta && o.eta.slice(0,10) < todayLocal() ? "#ef444408" : "transparent" } },
                 import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600, color: "#58a6ff" } }, br?.name || branch.name),
                 import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600 } }, o.po_ref || "\u2014"),
                 import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
@@ -15510,7 +15516,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                 return import_react.default.createElement(
                   "tr",
                   { key: `${i}_${gi}`, style: { borderBottom: "1px solid #21262d", opacity: grpRecvd ? 0.6 : 1,
-                  background: !grpRecvd && etaKey && etaKey < new Date().toISOString().slice(0,10) ? "#ef444408" : "transparent" } },
+                  background: !grpRecvd && etaKey && etaKey < todayLocal() ? "#ef444408" : "transparent" } },
                   import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600, color: "#58a6ff" } }, showPO ? br?.name || branch.name : ""),
                   import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600 } }, showPO ? o.po_ref || "\u2014" : "\u21B3"),
                   import_react.default.createElement("td", { style: { padding: "8px 9px" } }, showPO ? o.supplier || "\u2014" : ""),
@@ -15523,8 +15529,8 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                     { style: { padding: "8px 9px", whiteSpace: "nowrap" } },
                     etaKey
                       ? import_react.default.createElement("strong", {
-                          style: { color: etaKey < new Date().toISOString().slice(0,10) && !grpRecvd ? "#f87171" : "#e6edf3" }
-                        }, etaKey < new Date().toISOString().slice(0,10) && !grpRecvd ? "\u26A0 " : "", fmtDate(etaKey))
+                          style: { color: etaKey < todayLocal() && !grpRecvd ? "#f87171" : "#e6edf3" }
+                        }, etaKey < todayLocal() && !grpRecvd ? "\u26A0 " : "", fmtDate(etaKey))
                       : "\u2014"
                   ),
                   import_react.default.createElement(
@@ -15787,7 +15793,7 @@ setOrders(ords);
           const bl = orderLines.filter((l) => bo.some((o) => o.id === l.order_id));
           const sm = computeStocks(bw, ul, bo, bl, bm);
           // Use date-based current week to match status page
-          const todayStr2 = new Date().toISOString().slice(0, 10);
+          const todayStr2 = todayLocal();
           let ci = bw.findIndex(w => w.week_ending >= todayStr2);
           if (ci < 0) ci = bw.length - 1;
           if (ci > 0) ci = ci - 1;
@@ -16011,7 +16017,7 @@ setOrders(ords);
         ul[u.week_id][u.material_id] = u;
       });
       // Date-based curIdx matching BranchView logic
-      const todayStr2 = new Date().toISOString().slice(0, 10);
+      const todayStr2 = todayLocal();
       let curIdx = bw.findIndex(w => w.week_ending >= todayStr2);
       if (curIdx < 0) curIdx = bw.length - 1;
       if (curIdx > 0) curIdx--;
@@ -16381,8 +16387,8 @@ setOrders(ords);
                   import_react.default.createElement("td", { style: { padding: "7px 9px", color: "#10b981", fontWeight: 600 } }, grpTotal),
                   import_react.default.createElement("td", { style: { padding: "7px 9px", whiteSpace: "nowrap" } }, etaKey
                       ? import_react.default.createElement("strong", {
-                          style: { color: etaKey < new Date().toISOString().slice(0,10) && !grpRecvd ? "#f87171" : "#e6edf3" }
-                        }, etaKey < new Date().toISOString().slice(0,10) && !grpRecvd ? "\u26A0 " : "", fmtDate(etaKey))
+                          style: { color: etaKey < todayLocal() && !grpRecvd ? "#f87171" : "#e6edf3" }
+                        }, etaKey < todayLocal() && !grpRecvd ? "\u26A0 " : "", fmtDate(etaKey))
                       : "\u2014"),
                   import_react.default.createElement(
                     "td",
