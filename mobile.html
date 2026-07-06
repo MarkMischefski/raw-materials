@@ -226,7 +226,8 @@ function avg6(weeks, wi, matId, ul) {
   return past.reduce((a, b) => a + b, 0) / past.length;
 }
 
-function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers) {
+function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers, curIdx) {
+  if (curIdx === undefined) curIdx = bw.length - 1;
   const res = {}; let prev = {};
   bw.forEach((w, wi) => {
     res[w.id] = {};
