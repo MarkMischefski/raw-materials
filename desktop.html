@@ -13718,7 +13718,16 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               setH("eta", newEta);
               setLines((ls) => ls.map((l) => !l.eta || l.eta === hdr.eta ? { ...l, eta: newEta } : l));
             }
-          })
+          }),
+          import_react.default.createElement("div", { style: { marginTop: 4 } },
+            import_react.default.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: hdr.eta_locked ? "#f59e0b" : "#8b949e", cursor: "pointer" } },
+              import_react.default.createElement("input", { type: "checkbox", checked: !!hdr.eta_locked,
+                onChange: (e) => setH("eta_locked", e.target.checked) }),
+              hdr.eta_locked
+                ? "\uD83D\uDD12 ETA locked — ERP sync will NOT update this order's due date"
+                : "\uD83D\uDD13 ETA unlocked — ERP sync can update due dates automatically"
+            )
+          )
         ),
         import_react.default.createElement(
           Field,
@@ -14837,6 +14846,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
         supplier: hdr.supplier || null,
         price_per_kg: +hdr.price_per_kg || null,
         eta: hdr.eta || null,
+        eta_locked: !!hdr.eta_locked,
         received: !!hdr.received,
         notes: hdr.notes || null,
         // Keep top-level qty as sum of lines for backward compat
@@ -15288,13 +15298,29 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                       import_react.default.createElement("span", { style: { color: r.variance > 0 ? "#10b981" : "#f87171", fontWeight: 700 } }, r.variance > 0 ? "+" : "", N(r.variance), " kg")
                     ),
                     import_react.default.createElement("div", { style: { fontSize: 10, color: "#484f58", marginTop: 4, lineHeight: 1.7 } },
-                      r.notes && r.notes.split(" | ").map((line, li) =>
-                        import_react.default.createElement("div", { key: li,
-                          style: { color: line.startsWith("Variance") ? (r.variance > 0 ? "#10b981" : "#f87171")
-                                        : line.startsWith("ERP total") ? "#e6edf3"
-                                        : "#8b949e" }
-                        }, line)
-                      )
+                      r.notes && (() => {
+                        const isResolved = r.notes.startsWith("Resolved");
+                        const noteStr = isResolved ? r.notes.replace(/^Resolved [0-9-]+ \| /, "") : r.notes;
+                        const lines = noteStr.split(" | ");
+                        return [
+                          isResolved && import_react.default.createElement("div", { key: "res",
+                            style: { color: "#484f58", fontStyle: "italic", marginBottom: 2, fontSize: 10 }
+                          }, "✓ Resolved " + r.notes.match(/^Resolved ([0-9-]+)/)?.[1]),
+                          ...lines.map((line, li) =>
+                            import_react.default.createElement("div", { key: li,
+                              style: { color:
+                                line.startsWith("Variance") ? (r.variance > 0 ? "#10b981" : "#f87171") :
+                                line.startsWith("= ERP") ? "#e6edf3" :
+                                line.startsWith("App:") ? "#8b949e" :
+                                line.startsWith("Stocktake") ? "#58a6ff" :
+                                line.startsWith("Usage") ? "#f87171" :
+                                line.startsWith("Receipts") ? "#10b981" :
+                                "#8b949e"
+                              }
+                            }, line)
+                          )
+                        ];
+                      })()
                     )
                   );
                 })
@@ -15439,7 +15465,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
           import_react.default.createElement("thead", null, import_react.default.createElement(
             "tr",
             { style: { background: "#0d1117" } },
-            ["Branch", "PO Ref", "Supplier", "Lines", "Qty (kg)", "$/kg", "Total", "ETA", "Status", "Notes", "ERP", ""].map((h) => import_react.default.createElement("th", { key: h, style: { padding: "8px 9px", textAlign: "left", color: "#8b949e", fontWeight: 600, fontSize: 10, textTransform: "uppercase", borderBottom: "1px solid #21262d", whiteSpace: "nowrap" } }, h))
+            ["Branch", "PO Ref", "Supplier", "Lines", "Qty (kg)", "Rcvd", "$/kg", "Total", "ETA", "Status", "Notes", "ERP", ""].map((h) => import_react.default.createElement("th", { key: h, style: { padding: "8px 9px", textAlign: "left", color: "#8b949e", fontWeight: 600, fontSize: 10, textTransform: "uppercase", borderBottom: "1px solid #21262d", whiteSpace: "nowrap" } }, h))
           )),
           import_react.default.createElement(
             "tbody",
@@ -15473,6 +15499,17 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                 import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
                 import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
                 import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
+                (() => {
+                  const erp2 = (erpPoLines || []).filter(l => { const a=String(l.hdr_seqno||'').trim(); const b2=String(o.po_ref||'').trim(); return a===b2||Number(a)===Number(b2); });
+                  const supQ2 = erp2.reduce((s,l)=>s+(l.sup_quant||0),0);
+                  const ordQ2 = erp2.reduce((s,l)=>s+(l.ord_quant||0),0);
+                  if (!erp2.length) return import_react.default.createElement("td", { style: { padding: "7px 8px" } }, "—");
+                  const pct = ordQ2 > 0 ? Math.round(supQ2/ordQ2*100) : 0;
+                  const col = supQ2 >= ordQ2 ? "#10b981" : supQ2 > 0 ? "#f59e0b" : "#484f58";
+                  return import_react.default.createElement("td", { style: { padding: "7px 8px", whiteSpace: "nowrap", color: col, fontWeight: supQ2>0?700:400 } },
+                    supQ2 > 0 ? N(supQ2)+" / "+N(ordQ2)+" kg ("+pct+"%)" : "—"
+                  );
+                })(),
                 (() => {
                   const erp = (erpPoLines || []).filter(l => { const a = String(l.hdr_seqno||'').trim(); const b2 = String(o.po_ref||'').trim(); return a === b2 || Number(a) === Number(b2); });
                   const hasErp = erp.length > 0;
@@ -15553,6 +15590,16 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                     )
                   ),
                   import_react.default.createElement("td", { style: { padding: "8px 9px", color: "#8b949e", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, showPO ? o.notes || "\u2014" : ""),
+                  gi === 0 ? (() => {
+                    const erpR = (erpPoLines || []).filter(l => { const a=String(l.hdr_seqno||'').trim(); const b2=String(o.po_ref||'').trim(); return a===b2||Number(a)===Number(b2); });
+                    const supR = erpR.reduce((s,l)=>s+(l.sup_quant||0),0);
+                    const ordR = erpR.reduce((s,l)=>s+(l.ord_quant||0),0);
+                    const pctR = ordR > 0 ? Math.round(supR/ordR*100) : 0;
+                    const colR = supR >= ordR ? "#10b981" : supR > 0 ? "#f59e0b" : "#484f58";
+                    return import_react.default.createElement("td", { style: { padding: "7px 8px", whiteSpace: "nowrap", color: colR, fontWeight: supR>0?700:400 } },
+                      erpR.length && supR > 0 ? N(supR)+" / "+N(ordR)+" kg ("+pctR+"%)" : "—"
+                    );
+                  })() : import_react.default.createElement("td", null),
                   import_react.default.createElement("td", { style: { padding: "7px 8px", whiteSpace: "nowrap" } }, gi === 0 ? (() => {
                     const erpZ = (erpPoLines || []).filter(l => { const a = String(l.hdr_seqno||'').trim(); const b2 = String(o.po_ref||'').trim(); return a === b2 || Number(a) === Number(b2); });
                     const hasZ = erpZ.length > 0;
@@ -15567,7 +15614,8 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                       style: { fontSize: 10, borderRadius: 3, padding: "2px 6px", cursor: "help",
                         background: allZ?"#10b98122":partZ?"#f59e0b22":hasZ?"#1f6feb22":"#ef444422",
                         color: allZ?"#10b981":partZ?"#f59e0b":hasZ?"#58a6ff":"#f87171" }
-                    }, allZ?"\u2713 Supplied":partZ?"\u26A1 Part":hasZ?"\u2713 ERP":"\u26A0 No ERP");
+                    }, allZ?"\u2713 Supplied":partZ?"\u26A1 Part":hasZ?"\u2713 ERP":"\u26A0 No ERP",
+                      o.eta_locked ? " \uD83D\uDD12" : "")
                   })() : null),
                   import_react.default.createElement(
                     "td",
@@ -15668,7 +15716,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
           dbGet("order_lines?select=*&order=order_id").catch(() => []),
           dbGet("suppliers?select=*&order=sort_order").catch(() => []),
           dbGet("branch_locations?select=*&order=branch_id,location").catch(() => []),
-          dbGet("stock_reconciliation?select=*&order=sync_date.desc&limit=500").catch(() => []),
+          dbGet("stock_reconciliation?select=*&order=branch_id,material_id,week_id").catch(() => []),
           dbGet("erp_po_lines?select=*&order=synced_at.desc").catch(e => { console.warn("erp_po_lines fetch failed:", e?.message); return []; })
         ]);
         setBranches(br);
@@ -16468,6 +16516,7 @@ setOrders(ords);
         supplier: hdr.supplier || null,
         price_per_kg: +hdr.price_per_kg || null,
         eta: hdr.eta || null,
+        eta_locked: !!hdr.eta_locked,
         received: !!hdr.received,
         notes: hdr.notes || null,
         qty: lines.reduce((s, l) => s + (+l.qty || 0), 0),
