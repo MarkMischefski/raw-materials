@@ -12955,7 +12955,10 @@
         // Future weeks (wi > curIdx): use forecast to project ahead
         const usage = actual != null ? actual : (wi <= curIdx ? 0 : forecast);
         const opening = wi === 0 ? u.opening_stock ?? 0 : prev[m.id] ?? u.opening_stock ?? 0;
-        const arrived = arrivedLines.filter((l) => l.material_id === m.id).reduce((s, l) => s + (l.qty || 0), 0);
+        // Deduct sup_quant (already supplied from ERP) so partially-received orders
+        // don't double-count: only the outstanding balance arrives in stock calc
+        const arrived = arrivedLines.filter((l) => l.material_id === m.id)
+          .reduce((s, l) => s + Math.max(0, (l.qty || 0) - (l.sup_quant || 0)), 0);
         const unassigned = mats[0]?.id === m.id ? arrivedLines.filter((l) => !l.material_id).reduce((s, l) => s + (l.qty || 0), 0) : 0;
         // Transfers: add incoming, subtract outgoing for this week
         const tIn  = (bTransfers||[]).filter(t => t.to_branch_id   === bw[0]?.branch_id && t.to_material_id   === m.id && t.week_number === w.week_number).reduce((s,t)=>s+(t.qty||0),0);
