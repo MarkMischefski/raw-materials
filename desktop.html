@@ -12927,7 +12927,7 @@
     if (!past.length) return null;
     return Math.round(past.reduce((s, v) => s + v, 0) / past.length / 100) * 100;
   }
-  function computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers, curIdx) {
+  function computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers, curIdx, bRecon) {
     if (!bw.length || !mats.length) return {};
     // curIdx: weeks <= curIdx are "past" (use 0 for missing actuals), > curIdx are future (use forecast)
     // Default to bw.length-1 so all weeks use 0-fallback if not provided (safe default)
@@ -12941,34 +12941,86 @@
       const pWEstr2 = wi > 0 ? bw[wi - 1].week_ending : "2000-01-01";
       const tWEstr2 = w.week_ending;
       const nonForecastOrds = (bOrds || []);  // include forecast orders in stock calc
-      const arrivedLines = (bLines2 || []).filter((l) => {
-        if (nonForecastOrds.length && !nonForecastOrds.find((o) => o.id === l.order_id)) return false;
-        const lineEta = (l.eta || bOrds.find((o) => o.id === l.order_id)?.eta || "").slice(0, 10);
-        if (!lineEta) return false;
-        return lineEta > pWEstr2 && lineEta <= tWEstr2;
-      });
+      // Build virtual line entries for stock placement:
+        // - Fully received lines: use received_date or effective date for full qty
+        // - Partially received lines (sup_quant > 0, not fully received):
+        //     * sup_quant arrives in curIdx week (or received_date when known)
+        //     * remaining qty (qty - sup_quant) stays at original ETA
+        // - Pending lines: full qty at ETA
+        const parentOrdMap = {};
+        (bOrds || []).forEach(o => { parentOrdMap[o.id] = o; });
+
+        const getEffectiveDate = (l) => {
+          const parentOrd = parentOrdMap[l.order_id];
+          const lineEta = (l.eta || parentOrd?.eta || "").slice(0, 10);
+          if (l.received && l.received_date) return l.received_date.slice(0, 10);
+          if (l.received && lineEta > (bw[curIdx]?.week_ending || "")) return (bw[curIdx+1]||bw[curIdx])?.week_ending || lineEta;
+          return lineEta;
+        };
+
+        // Expand lines into virtual entries {material_id, qty, date}
+        const virtualArrivals = [];
+        (bLines2 || []).forEach(l => {
+          if (nonForecastOrds.length && !nonForecastOrds.find(o => o.id === l.order_id)) return;
+          if (!+l.qty) return;
+          const parentOrd = parentOrdMap[l.order_id];
+          const lineEta = (l.eta || parentOrd?.eta || "").slice(0, 10);
+          const sup = l.sup_quant || 0;
+
+          if (l.received) {
+            // Fully received — all qty at effective date
+            const date = getEffectiveDate(l);
+            if (date) virtualArrivals.push({ material_id: l.material_id, qty: l.qty, date });
+          } else if (sup > 0 && sup < (l.qty || 0)) {
+            // Partially received — split into received portion and outstanding
+            // Received portion: use received_date (actual ERP transaction date) if available,
+            // otherwise fall back to current live week (curIdx+1)
+            const rcvdDate = l.received_date
+              ? l.received_date.slice(0, 10)
+              : (bw[curIdx + 1] || bw[curIdx])?.week_ending;
+            if (rcvdDate) virtualArrivals.push({ material_id: l.material_id, qty: sup, date: rcvdDate });
+            // Outstanding portion: stays at original ETA
+            if (lineEta) virtualArrivals.push({ material_id: l.material_id, qty: l.qty - sup, date: lineEta });
+          } else {
+            // Fully pending — full qty at ETA
+            if (lineEta) virtualArrivals.push({ material_id: l.material_id, qty: l.qty, date: lineEta });
+          }
+        });
+
+        // Filter virtual arrivals for this week's window
+        const arrivedLines = virtualArrivals.filter(v =>
+          v.date > pWEstr2 && v.date <= tWEstr2
+        );
+
       mats.forEach((m) => {
         const u = (ul[w.id] || {})[m.id] || {};
         const forecast = u.forecast_qty || 0;
         const actual = u.actual_qty ?? null;
-        // Past/current weeks (wi <= curIdx): if no actual recorded, use 0 not forecast
-        // Future weeks (wi > curIdx): use forecast to project ahead
         const usage = actual != null ? actual : (wi <= curIdx ? 0 : forecast);
-        const opening = wi === 0 ? u.opening_stock ?? 0 : prev[m.id] ?? u.opening_stock ?? 0;
-        // Deduct sup_quant (already supplied from ERP) so partially-received orders
-        // don't double-count: only the outstanding balance arrives in stock calc
-        const arrived = arrivedLines.filter((l) => l.material_id === m.id)
-          .reduce((s, l) => s + Math.max(0, (l.qty || 0) - (l.sup_quant || 0)), 0);
+        const opening = (u.opening_stock != null && u.opening_stock !== 0 && wi <= curIdx)
+          ? u.opening_stock
+          : (wi === 0 ? 0 : prev[m.id] ?? 0);
+        const arrived = arrivedLines
+          .filter(v => v.material_id === m.id)
+          .reduce((s, v) => s + v.qty, 0);
         const unassigned = mats[0]?.id === m.id ? arrivedLines.filter((l) => !l.material_id).reduce((s, l) => s + (l.qty || 0), 0) : 0;
         // Transfers: add incoming, subtract outgoing for this week
         const tIn  = (bTransfers||[]).filter(t => t.to_branch_id   === bw[0]?.branch_id && t.to_material_id   === m.id && t.week_number === w.week_number).reduce((s,t)=>s+(t.qty||0),0);
         const tOut = (bTransfers||[]).filter(t => t.from_branch_id === bw[0]?.branch_id && t.from_material_id === m.id && t.week_number === w.week_number).reduce((s,t)=>s+(t.qty||0),0);
 
         const calculated = opening - usage + arrived + unassigned + tIn - tOut;
-        // Use closing_stock override if explicitly set by admin stock count
-        res[w.id][m.id] = u.closing_stock != null ? u.closing_stock : calculated;
+        // Priority: 1. closing_stock (admin), 2. erp_stock from recon, 3. calculated
+        const _recon = bRecon && bRecon.find(r => r.week_id === w.id && r.material_id === m.id);
+        if (u.closing_stock != null) {
+          res[w.id][m.id] = u.closing_stock;
+        } else if (_recon?.erp_stock != null && wi <= curIdx) {
+          res[w.id][m.id] = _recon.erp_stock;
+        } else {
+          res[w.id][m.id] = calculated;
+        }
       });
       mats.forEach((m) => {
+        // Cascade from ERP stock if available (most accurate base for next week)
         prev[m.id] = res[w.id][m.id];
       });
     });
@@ -13599,9 +13651,22 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
     const blank = { branch_id: branchId, po_ref: "", supplier: SUPPLIERS[0], price_per_kg: "", eta: "", notes: "", received: false };
     const [hdr, setHdr] = (0, import_react.useState)(order ? { ...blank, ...order } : blank);
     const setH = (k, v) => setHdr((p) => ({ ...p, [k]: v }));
+    // Lines are locked when order has a PO ref (ERP controls them)
+    // Only forecast/no-PO orders can have lines manually edited
+    const isErpLocked = !!(hdr.po_ref && !hdr.is_forecast);
     const getInitLines = () => {
       if (order && orderLines && orderLines.length) {
-        return orderLines.map((l, i) => ({ ...l, _key: i, eta: l.eta || order.eta || "", received: l.received ?? !!order.received }));
+        return orderLines.map((l, i) => {
+          const mat = allMats.find(m => m.id === l.material_id);
+          return {
+            ...l,
+            _key: i,
+            eta: l.eta || order.eta || "",
+            received: l.received ?? !!order.received,
+            // Auto-populate material_type_id from allMats if not set
+            material_type_id: l.material_type_id || mat?.material_type_id || "",
+          };
+        });
       }
       return [{ _key: 0, material_id: "", material_type_id: "", qty: "", notes: "", eta: order?.eta || "", received: false }];
     };
@@ -13750,13 +13815,14 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
             { style: { fontSize: 11, fontWeight: 700, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.5px" } },
             "Order Lines"
           ),
-          import_react.default.createElement("button", { style: { ...btnS, fontSize: 11 }, onClick: addLine }, "+ Add Line")
+          isErpLocked && import_react.default.createElement("span", { style: { fontSize: 10, color: "#f59e0b", marginLeft: 8 } }, "\uD83D\uDD12 Managed by ERP — edit in your purchasing system"),
+          !isErpLocked && import_react.default.createElement("button", { style: { ...btnS, fontSize: 11 }, onClick: addLine, disabled: isErpLocked, title: isErpLocked ? "Lines are controlled by ERP — edit via purchase order in your ERP system" : "" }, isErpLocked ? "🔒 ERP Lines" : "+ Add Line")
         ),
         // Column headers
         import_react.default.createElement(
           "div",
           { style: { display: "grid", gridTemplateColumns: "140px 130px 70px 105px 34px 24px", gap: 6, marginBottom: 6 } },
-          ["Stock Line", "Type", "Qty", "Due Date", "Rcvd", ""].map(
+          (isErpLocked ? ["Stock Line", "Type", "Ord Qty", "Due Date", "Supplied", "Rcvd", ""] : ["Stock Line", "Type", "Qty", "Due Date", "Rcvd", ""]).map(
             (h) => import_react.default.createElement("div", { key: h, style: { fontSize: 10, fontWeight: 600, color: "#484f58", textTransform: "uppercase", letterSpacing: "0.4px" } }, h)
           )
         ),
@@ -13768,6 +13834,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               key: "ms_" + l._key + "_" + (l.material_id || "") + "_" + brMats.length,
               val: l.material_id != null ? String(l.material_id) : "",
               style: { ...inp, padding: "5px 8px" },
+              disabled: isErpLocked,
               onChange: (e) => setLine(l._key, "material_id", e.target.value ? +e.target.value : null),
               options: [{ value: "", label: "\u2014 stock line \u2014" }, ...brMats.map((m) => {
                 const mt = materialTypes.find((t) => t.id === m.material_type_id);
@@ -13778,6 +13845,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               key: "mt_" + l._key + "_" + (l.material_type_id || "") + "_" + materialTypes.length,
               val: l.material_type_id != null ? String(l.material_type_id) : "",
               style: { ...inp, padding: "5px 8px" },
+              disabled: isErpLocked,
               onChange: (e) => setLine(l._key, "material_type_id", e.target.value ? +e.target.value : null),
               options: [{ value: "", label: "\u2014 type \u2014" }, ...Object.entries(typeGroups).sort(([a], [b]) => a > b ? 1 : -1).flatMap(
                 ([grp, types]) => types.sort((a, b) => a.sort_order - b.sort_order).map((mt) => ({ value: String(mt.id), label: `${grp}: ${mt.label}` }))
@@ -13788,14 +13856,24 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               type: "number",
               style: { ...inp, padding: "5px 8px" },
               value: l.qty,
+              disabled: isErpLocked,
               onChange: (e) => setLine(l._key, "qty", e.target.value),
               placeholder: "0"
             }),
+            // Show received qty when ERP locked
+            isErpLocked && import_react.default.createElement("td", { style: { padding: "5px 8px", whiteSpace: "nowrap", fontSize: 12 } },
+              l.sup_quant > 0
+                ? import_react.default.createElement("span", {
+                    style: { color: l.received ? "#10b981" : "#f59e0b", fontWeight: 600 }
+                  }, N(l.sup_quant), " kg")
+                : import_react.default.createElement("span", { style: { color: "#484f58" } }, "—")
+            ),
             // Line ETA — defaults to header eta, can override per line
             import_react.default.createElement("input", {
               type: "date",
               style: { ...inp, padding: "5px 8px", fontSize: 11 },
               value: l.eta || hdr.eta || "",
+              disabled: isErpLocked,
               onChange: (e) => setLine(l._key, "eta", e.target.value || null),
               title: "Due date for this line (defaults to PO date)"
             }),
@@ -13805,14 +13883,17 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               import_react.default.createElement("input", {
                 type: "checkbox",
                 checked: !!l.received,
+                disabled: isErpLocked,
                 onChange: (e) => setLine(l._key, "received", e.target.checked),
                 title: "Received"
               })
             ),
             // Remove
             lines.length > 1 ? import_react.default.createElement("button", {
-              onClick: () => removeLine(l._key),
-              style: { background: "none", border: "none", color: "#f85149", cursor: "pointer", fontSize: 16, padding: 0, lineHeight: 1 }
+              onClick: () => !isErpLocked && removeLine(l._key),
+              disabled: isErpLocked,
+              title: isErpLocked ? "ERP controlled" : "Remove line",
+              style: { background: "none", border: "none", color: isErpLocked ? "#484f58" : "#f85149", cursor: isErpLocked ? "not-allowed" : "pointer", fontSize: 16, padding: 0, lineHeight: 1 }
             }, "\xD7") : import_react.default.createElement("span", null)
           )
         ),
@@ -14762,7 +14843,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
         if (ci < 0) ci = bw.length - 1;
         if (ci > 0) ci--;
         return ci;
-      })()), [bw.length, ul, bOrds.length, bLines2.length, mats.length, bTransfers.length]);
+      })(), bRecon), [bw.length, ul, bOrds.length, bLines2.length, mats.length, bTransfers.length]);
     const curIdx = (0, import_react.useMemo)(() => {
       const today = todayLocal();
       // Find the current week by date first
@@ -15160,9 +15241,17 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
       const pWEstr = wi > 0 ? bw[wi - 1].week_ending : "2000-01-01";
       const tWEstr = w.week_ending;
       const wLines = bLines2.filter((l) => {
-        const eta = (l.eta || bOrds.find((o) => o.id === l.order_id)?.eta || "").slice(0, 10);
-        if (!eta) return false;
-        return eta > pWEstr && eta <= tWEstr && +l.qty > 0;
+        const lEta = (l.eta || bOrds.find((o) => o.id === l.order_id)?.eta || "").slice(0, 10);
+        let effectiveEta;
+        if (l.received && l.received_date) {
+          effectiveEta = l.received_date.slice(0, 10);
+        } else if (l.received && lEta > bw[curIdx]?.week_ending) {
+          effectiveEta = bw[curIdx]?.week_ending || lEta;
+        } else {
+          effectiveEta = lEta;
+        }
+        if (!effectiveEta) return false;
+        return effectiveEta > pWEstr && effectiveEta <= tWEstr && +l.qty > 0;
       });
       const wOrdIds = [...new Set(wLines.map((l) => l.order_id))];
       const wOrds = bOrds.filter((o) => wOrdIds.includes(o.id));
@@ -15187,28 +15276,32 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               { key: `s${m.id}`, style: { padding: "8px 9px", whiteSpace: "nowrap",
                 background: (() => {
                   const pWE = wi > 0 ? bw[wi-1].week_ending : "2000-01-01";
-                  const hasReceipt = bLines2.some(l =>
-                    l.material_id === m.id && l.received &&
-                    (l.eta || "").slice(0,10) > pWE &&
-                    (l.eta || "").slice(0,10) <= w.week_ending &&
-                    bOrds.some(o => o.id === l.order_id && !o.is_forecast)
-                  );
-                  // Red if a pending order line is due on or before this week's end and not yet received
+                  const lineEffDate = (l) => {
+                    const ord = bOrds.find(o => o.id === l.order_id);
+                    const eta = (l.eta || ord?.eta || "").slice(0,10);
+                    if (l.received && l.received_date) return l.received_date.slice(0,10);
+                    if (l.received && eta > (bw[curIdx]?.week_ending||"")) return (bw[curIdx+1]||bw[curIdx])?.week_ending || eta;
+                    return eta;
+                  };
+                  const hasReceipt = bLines2.some(l => {
+                    if (l.material_id !== m.id || !l.received) return false;
+                    if (!bOrds.some(o => o.id === l.order_id && !o.is_forecast)) return false;
+                    const d = lineEffDate(l);
+                    return d > pWE && d <= w.week_ending;
+                  });
                   const todayStr = todayLocal();
-                  const hasPending = w.week_ending <= todayStr && bLines2.some(l =>
-                    l.material_id === m.id && !l.received &&
-                    (l.eta || "").slice(0,10) !== "" &&
-                    (l.eta || "").slice(0,10) <= w.week_ending &&
-                    bOrds.some(o => o.id === l.order_id && !o.received && !o.is_forecast)
-                  );
-                  // Also show red in future weeks where order is due
-                  const hasFuturePending = isFut && bLines2.some(l =>
-                    l.material_id === m.id && !l.received &&
-                    (l.eta || "").slice(0,10) !== "" &&
-                    (l.eta || "").slice(0,10) > pWE &&
-                    (l.eta || "").slice(0,10) <= w.week_ending &&
-                    bOrds.some(o => o.id === l.order_id && !o.received && !o.is_forecast)
-                  );
+                  const hasPending = w.week_ending <= todayStr && bLines2.some(l => {
+                    if (l.material_id !== m.id || l.received) return false;
+                    if (!bOrds.some(o => o.id === l.order_id && !o.received && !o.is_forecast)) return false;
+                    const d = lineEffDate(l);
+                    return d !== "" && d <= w.week_ending;
+                  });
+                  const hasFuturePending = isFut && bLines2.some(l => {
+                    if (l.material_id !== m.id || l.received) return false;
+                    if (!bOrds.some(o => o.id === l.order_id && !o.received && !o.is_forecast)) return false;
+                    const d = lineEffDate(l);
+                    return d !== "" && d > pWE && d <= w.week_ending;
+                  });
                   return hasReceipt ? "#10b98130" : hasPending ? "#ef444430" : hasFuturePending ? "#f59e0b25" : "transparent";
                 })()
               } },
@@ -15365,7 +15458,10 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                   thisWeekLines.map((l, li) => {
                     const m = allMats.find((m2) => m2.id === l.material_id), mt = materialTypes.find((t) => t.id === l.material_type_id);
                     const label = m?.name || mt?.label || "?";
-                    const lineEta = l.eta || o.eta;
+                    // Show received_date (actual arrival) for received lines, otherwise show eta
+                    const lineEta = l.received && l.received_date
+                      ? l.received_date
+                      : (l.eta || o.eta);
                     return import_react.default.createElement(
                       "div",
                       { key: li, style: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, background: "#0d1117", borderRadius: 4, padding: "4px 8px", marginTop: 3 } },
@@ -15373,10 +15469,22 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                         "div",
                         { style: { display: "flex", alignItems: "center", gap: 6 } },
                         import_react.default.createElement("span", { style: { color: "#58a6ff", fontWeight: 600 } }, label),
-                        lineEta && import_react.default.createElement("span", { style: { color: "#8b949e", fontSize: 10 } }, fmtDate(lineEta)),
-                        l.received && import_react.default.createElement("span", { style: { background: "#10b98122", color: "#10b981", borderRadius: 3, padding: "1px 5px", fontSize: 10 } }, "\u2713")
+                        lineEta && import_react.default.createElement("span", {
+                          style: { color: l.received && l.received_date ? "#10b981" : "#8b949e", fontSize: 10 }
+                        }, l.received && l.received_date ? "Rcvd " + fmtDate(l.received_date) : fmtDate(lineEta)),
+                        l.received && !l.received_date && import_react.default.createElement("span", { style: { background: "#10b98122", color: "#10b981", borderRadius: 3, padding: "1px 5px", fontSize: 10 } }, "\u2713"),
+                        l.sup_quant > 0 && !l.received && import_react.default.createElement("span", { style: { background: "#f59e0b22", color: "#f59e0b", borderRadius: 3, padding: "1px 5px", fontSize: 10 } }, "Part")
                       ),
-                      import_react.default.createElement("strong", { style: { color: "#e6edf3" } }, N(l.qty), " kg")
+                      import_react.default.createElement("div", { style: { textAlign: "right" } },
+                        l.sup_quant > 0
+                          ? import_react.default.createElement("span", null,
+                              import_react.default.createElement("strong", { style: { color: l.received ? "#10b981" : "#f59e0b" } }, N(l.sup_quant)),
+                              import_react.default.createElement("span", { style: { color: "#484f58" } }, " / "),
+                              import_react.default.createElement("strong", { style: { color: "#e6edf3" } }, N(l.qty)),
+                              import_react.default.createElement("span", { style: { color: "#8b949e", fontSize: 10 } }, " kg")
+                            )
+                          : import_react.default.createElement("strong", { style: { color: "#e6edf3" } }, N(l.qty), " kg")
+                      )
                     );
                   }),
                   o.notes && import_react.default.createElement("div", { style: { fontSize: 10, color: "#8b949e", marginTop: 4 } }, o.notes)
@@ -15490,7 +15598,9 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               const etaKeys = Object.keys(etaGroups).sort();
               return etaKeys.length === 0 ? [import_react.default.createElement(
                 "tr",
-                { key: i, style: { borderBottom: "1px solid #21262d", opacity: o.received ? 0.6 : 1,
+                { key: i,
+                onClick: () => setOrderModal({ order: o, lines: orderLines.filter(l => l.order_id === o.id) }),
+                style: { borderBottom: "1px solid #21262d", opacity: o.received ? 0.6 : 1, cursor: "pointer",
                   background: !o.received && o.eta && o.eta.slice(0,10) < todayLocal() ? "#ef444408" : "transparent" } },
                 import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600, color: "#58a6ff" } }, br?.name || branch.name),
                 import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600 } }, o.po_ref || "\u2014"),
@@ -15564,7 +15674,9 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                 const showPO = gi === 0;
                 return import_react.default.createElement(
                   "tr",
-                  { key: `${i}_${gi}`, style: { borderBottom: "1px solid #21262d", opacity: grpRecvd ? 0.6 : 1,
+                  { key: `${i}_${gi}`,
+                  onClick: () => setOrderModal({ order: o, lines: orderLines.filter(l => l.order_id === o.id) }),
+                  style: { borderBottom: "1px solid #21262d", opacity: grpRecvd ? 0.6 : 1, cursor: "pointer",
                   background: !grpRecvd && etaKey && etaKey < todayLocal() ? "#ef444408" : "transparent" } },
                   import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600, color: "#58a6ff" } }, showPO ? br?.name || branch.name : ""),
                   import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600 } }, showPO ? o.po_ref || "\u2014" : "\u21B3"),
@@ -15626,7 +15738,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                     import_react.default.createElement(
                       "div",
                       { style: { display: "flex", gap: 4, alignItems: "center" } },
-                      !o.received && !o.is_forecast && import_react.default.createElement("button", {
+                      !o.received && !o.is_forecast && !o.po_ref && import_react.default.createElement("button", {
                         onClick: async () => {
                           await dbPatch(`orders?id=eq.${o.id}`, { received: true });
                           await dbPatch(`order_lines?order_id=eq.${o.id}`, { received: true });
@@ -15634,7 +15746,11 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                         },
                         style: { ...btnS, fontSize: 10, background: "#10b98122", color: "#10b981", border: "1px solid #10b98144" }
                       }, "\u2713 Rcvd"),
-                                        showPO && role === "admin" && import_react.default.createElement("button", { onClick: () => setOrderModal({ order: o, lines: orderLines.filter((l) => l.order_id === o.id) }), style: { background: "none", border: "none", color: "#8b949e", cursor: "pointer", padding: 4 } }, "\u270F")
+                                        import_react.default.createElement("button", {
+                        onClick: (ev) => { ev.stopPropagation(); setOrderModal({ order: o, lines: orderLines.filter((l) => l.order_id === o.id) }); },
+                        title: o.po_ref && !o.is_forecast ? "View / Edit order" : "Edit order",
+                        style: { background: "none", border: "none", color: "#8b949e", cursor: "pointer", padding: 4 }
+                      }, "\u270F")
                     )
                   )
                 );
@@ -15720,7 +15836,17 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
           dbGet("suppliers?select=*&order=sort_order").catch(() => []),
           dbGet("branch_locations?select=*&order=branch_id,location").catch(() => []),
           dbGet("stock_reconciliation?select=*&order=branch_id,material_id,week_id").catch(() => []),
-          dbGet("erp_po_lines?select=*&order=synced_at.desc").catch(e => { console.warn("erp_po_lines fetch failed:", e?.message); return []; })
+          (async () => {
+            const PAGE = 1000; let all = [], from = 0;
+            while (true) {
+              const page = await dbGet(`erp_po_lines?select=*&order=synced_at.desc&limit=${PAGE}&offset=${from}`).catch(() => []);
+              if (!page.length) break;
+              all = all.concat(page);
+              if (page.length < PAGE) break;
+              from += PAGE;
+            }
+            return all;
+          })()
         ]);
         setBranches(br);
         setAllMats(mats);
@@ -15884,7 +16010,7 @@ setOrders(ords);
       import_react.default.createElement(
         "div",
         { style: { padding: "20px 22px", maxWidth: 1400, margin: "0 auto" } },
-        showAll ? import_react.default.createElement(AllView, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, orders, orderLines, erpPoLines, role, reload: load, setShowAll }) : showForecast ? import_react.default.createElement(ForecastTool, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, orders, orderLines, erpPoLines, transfers, reload: load, onClose: () => setShowForecast(false) }) : showSettings ? import_react.default.createElement(SettingsPage, { materialTypes, branches, allMaterials: allMats, suppliers, reload: load , branchLocations, reload: load }) : branch && import_react.default.createElement(BranchView, { key: branch.id, branch, branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, reconData, erpPoLines, orders, orderLines, activeTab, setActiveTab, role, reload: load })
+        showAll ? import_react.default.createElement(AllView, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, orders, orderLines, erpPoLines, reconData, role, reload: load, setShowAll }) : showForecast ? import_react.default.createElement(ForecastTool, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, orders, orderLines, erpPoLines, transfers, reload: load, onClose: () => setShowForecast(false) }) : showSettings ? import_react.default.createElement(SettingsPage, { materialTypes, branches, allMaterials: allMats, suppliers, reload: load , branchLocations, reload: load }) : branch && import_react.default.createElement(BranchView, { key: branch.id, branch, branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, reconData, erpPoLines, orders, orderLines, activeTab, setActiveTab, role, reload: load })
       )
     );
   }
@@ -16059,7 +16185,7 @@ setOrders(ords);
       )
     );
   }
-  function AllView({ branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, orders, orderLines, erpPoLines, role, reload, setShowAll }) {
+  function AllView({ branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, orders, orderLines, erpPoLines, reconData, role, reload, setShowAll }) {
     const [activeTab, setActiveTab] = (0, import_react.useState)("status");
     const [orderFilter, setOrderFilter] = (0, import_react.useState)(() => sessionStorage.getItem("orderFilter") || "pending");
     const [convertModal, setConvertModal] = (0, import_react.useState)(null);
@@ -16081,7 +16207,10 @@ setOrders(ords);
       let curIdx = bw.findIndex(w => w.week_ending >= todayStr2);
       if (curIdx < 0) curIdx = bw.length - 1;
       if (curIdx > 0) curIdx--;
-      const stockMap = computeStocks(bw, ul, bOrds, bLines2, mats, undefined, curIdx);
+      const stockMap = computeStocks(bw, ul, bOrds, bLines2, mats,
+        (transfers||[]).filter(t=>t.from_branch_id===br.id||t.to_branch_id===br.id),
+        curIdx,
+        (reconData||[]).filter(r=>r.branch_id===br.id));
       const curWk = bw[curIdx];
       return { br, bw, mats, bOrds, bLines: bLines2, ul, stockMap, curIdx, curWk };
     }), [branches, allMats, allWeeks, rawUsage, orders, orderLines]);
@@ -16490,7 +16619,7 @@ setOrders(ords);
                         onClick: () => setConvertModal(o),
                         style: { ...btnS, fontSize: 10, background: "#a78bfa22", color: "#a78bfa", border: "1px solid #a78bfa44" }
                       }, "\u2192 Confirm"),
-                      !o.received && !o.is_forecast && import_react.default.createElement("button", {
+                      !o.received && !o.is_forecast && !o.po_ref && import_react.default.createElement("button", {
                         onClick: async () => {
                           await dbPatch(`orders?id=eq.${o.id}`, { received: true });
                           await dbPatch(`order_lines?order_id=eq.${o.id}`, { received: true });
