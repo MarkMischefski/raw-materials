@@ -234,18 +234,37 @@ function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers, curIdx) {
     const pWEstr = wi > 0 ? bw[wi-1].week_ending : "2000-01-01";
     const tWEstr = w.week_ending;
     const nonFcst = (bOrds||[]).filter(o => !o.is_forecast);
-    const arrived = (bLines||[]).filter(l => {
-      if (nonFcst.length && !nonFcst.find(o => o.id === l.order_id)) return false;
-      const eta = (l.eta || bOrds.find(o => o.id === l.order_id)?.eta || "").slice(0,10);
-      return eta && eta > pWEstr && eta <= tWEstr;
+    const ordMapMob = {};
+    (bOrds||[]).forEach(o => { ordMapMob[o.id] = o; });
+    const virtualArrMob = [];
+    (bLines||[]).forEach(l => {
+      if (nonFcst.length && !nonFcst.find(o => o.id === l.order_id)) return;
+      if (!+l.qty) return;
+      const pOrd = ordMapMob[l.order_id];
+      const lEta = (l.eta || pOrd?.eta || "").slice(0,10);
+      const sup = l.sup_quant || 0;
+      if (l.received) {
+        let d = l.received_date ? l.received_date.slice(0,10)
+          : (lEta > (bw[curIdx]?.week_ending||"") ? (bw[curIdx+1]||bw[curIdx])?.week_ending : lEta);
+        if (d) virtualArrMob.push({ material_id: l.material_id, qty: l.qty, date: d });
+      } else if (sup > 0 && sup < (l.qty||0)) {
+        const rd = l.received_date ? l.received_date.slice(0,10) : (bw[curIdx+1]||bw[curIdx])?.week_ending;
+        if (rd) virtualArrMob.push({ material_id: l.material_id, qty: sup, date: rd });
+        if (lEta) virtualArrMob.push({ material_id: l.material_id, qty: l.qty - sup, date: lEta });
+      } else {
+        if (lEta) virtualArrMob.push({ material_id: l.material_id, qty: l.qty, date: lEta });
+      }
     });
+    const arrived = virtualArrMob.filter(v => v.date > pWEstr && v.date <= tWEstr);
     mats.forEach(m => {
       const u = (ul[w.id]||{})[m.id] || {};
       const forecast = u.forecast_qty || 0;
       const actual = u.actual_qty ?? null;
       const usage = actual != null ? actual : (wi <= curIdx ? 0 : forecast);
-      const opening = wi === 0 ? u.opening_stock ?? 0 : prev[m.id] ?? u.opening_stock ?? 0;
-      const arrQty = arrived.filter(l => l.material_id === m.id).reduce((s,l) => s+(+l.qty||0), 0);
+      const opening = (u.opening_stock != null && u.opening_stock !== 0 && wi <= curIdx)
+        ? u.opening_stock
+        : (wi === 0 ? 0 : prev[m.id] ?? 0);
+      const arrQty = arrived.filter(v => v.material_id === m.id).reduce((s,v) => s + v.qty, 0);
       const tIn  = (bTransfers||[]).filter(t => t.to_branch_id === w.branch_id && t.to_material_id === m.id && t.week_number === w.week_number).reduce((s,t) => s+(t.qty||0), 0);
       const tOut = (bTransfers||[]).filter(t => t.from_branch_id === w.branch_id && t.from_material_id === m.id && t.week_number === w.week_number).reduce((s,t) => s+(t.qty||0), 0);
       const calculated = opening - usage + arrQty + tIn - tOut;
