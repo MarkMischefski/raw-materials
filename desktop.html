@@ -14213,7 +14213,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
       )
     );
   }
-  function ForecastTool({ branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, orders, orderLines, transfers, reload, onClose }) {
+  function ForecastTool({ branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, orders, orderLines, transfers, reconData, reload, onClose }) {
     const todayStr = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
     const [dueDate, setDueDate] = (0, import_react.useState)(() => {
       const d = /* @__PURE__ */ new Date();
@@ -14247,7 +14247,9 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
           }
         }
         const bTransfers = (transfers || []).filter(t => t.from_branch_id === br.id || t.to_branch_id === br.id);
-        const stockMap = computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers);
+        const stockMap = computeStocks(bw, ul, bOrds, bLines2, mats, bTransfers,
+          (() => { const t = todayLocal(); let ci = bw.findIndex(w => w.week_ending >= t); if (ci < 0) ci = bw.length-1; if (ci > 0) ci--; return ci; })(),
+          (reconData||[]).filter(r => r.branch_id === br.id));
         let dueIdx = bw.length - 1;
         for (let i = 0; i < bw.length; i++) {
           if (bw[i].week_ending >= dueDate) {
@@ -16010,7 +16012,7 @@ setOrders(ords);
       import_react.default.createElement(
         "div",
         { style: { padding: "20px 22px", maxWidth: 1400, margin: "0 auto" } },
-        showAll ? import_react.default.createElement(AllView, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, orders, orderLines, erpPoLines, reconData, role, reload: load, setShowAll }) : showForecast ? import_react.default.createElement(ForecastTool, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, orders, orderLines, erpPoLines, transfers, reload: load, onClose: () => setShowForecast(false) }) : showSettings ? import_react.default.createElement(SettingsPage, { materialTypes, branches, allMaterials: allMats, suppliers, reload: load , branchLocations, reload: load }) : branch && import_react.default.createElement(BranchView, { key: branch.id, branch, branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, reconData, erpPoLines, orders, orderLines, activeTab, setActiveTab, role, reload: load })
+        showAll ? import_react.default.createElement(AllView, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, orders, orderLines, erpPoLines, reconData, role, reload: load, setShowAll }) : showForecast ? import_react.default.createElement(ForecastTool, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, orders, orderLines, erpPoLines, transfers, reconData, reload: load, onClose: () => setShowForecast(false) }) : showSettings ? import_react.default.createElement(SettingsPage, { materialTypes, branches, allMaterials: allMats, suppliers, reload: load , branchLocations, reload: load }) : branch && import_react.default.createElement(BranchView, { key: branch.id, branch, branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, reconData, erpPoLines, orders, orderLines, activeTab, setActiveTab, role, reload: load })
       )
     );
   }
