@@ -14881,8 +14881,16 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
     twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
     const twoMonthsAgoStr = twoMonthsAgo.toISOString().slice(0, 10);
     const isRecentEnough = (o) => !o.received || !o.eta || o.eta.slice(0, 10) >= twoMonthsAgoStr;
+    // An order is effectively received if o.received=true OR
+    // all its ERP lines are received (covers gap between sync runs)
+    const isEffectivelyReceived = (o) => {
+      if (o.received) return true;
+      if (!o.po_ref || o.is_forecast) return false;
+      const oLines = bLines2.filter(l => l.order_id === o.id);
+      return oLines.length > 0 && oLines.every(l => l.received);
+    };
     const visOrds = role === "admin" ? bOrds : bOrds.filter((o) => !o.is_forecast);
-    const filtOrds = orderFilter === "all" ? visOrds.filter(isRecentEnough) : orderFilter === "forecast" ? visOrds.filter((o) => o.is_forecast) : orderFilter === "pending" ? visOrds.filter((o) => !o.received && !o.is_forecast) : visOrds.filter((o) => o.received && isRecentEnough(o));
+    const filtOrds = orderFilter === "all" ? visOrds.filter(isRecentEnough) : orderFilter === "forecast" ? visOrds.filter((o) => o.is_forecast) : orderFilter === "pending" ? visOrds.filter((o) => !isEffectivelyReceived(o) && !o.is_forecast) : visOrds.filter((o) => isEffectivelyReceived(o) && isRecentEnough(o));
     function orderMatSummary(o) {
       const lines = bLines2.filter((l) => l.order_id === o.id && +l.qty > 0);
       if (!lines.length) return null;
@@ -15609,8 +15617,8 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                 "tr",
                 { key: i,
                 onClick: () => setOrderModal({ order: o, lines: orderLines.filter(l => l.order_id === o.id) }),
-                style: { borderBottom: "1px solid #21262d", opacity: o.received ? 0.6 : 1, cursor: "pointer",
-                  background: !o.received && o.eta && o.eta.slice(0,10) < todayLocal() ? "#ef444408" : "transparent" } },
+                style: { borderBottom: "1px solid #21262d", opacity: isEffectivelyReceived(o) ? 0.6 : 1, cursor: "pointer",
+                  background: !isEffectivelyReceived(o) && o.eta && o.eta.slice(0,10) < todayLocal() ? "#ef444408" : "transparent" } },
                 import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600, color: "#58a6ff" } }, br?.name || branch.name),
                 import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600 } }, o.po_ref || "\u2014"),
                 import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
