@@ -12997,9 +12997,13 @@
         const forecast = u.forecast_qty || 0;
         const actual = u.actual_qty ?? null;
         const usage = actual != null ? actual : (wi <= curIdx ? 0 : forecast);
-        const opening = (u.opening_stock != null && u.opening_stock !== 0 && wi <= curIdx)
-          ? u.opening_stock
-          : (wi === 0 ? 0 : prev[m.id] ?? 0);
+        // opening_stock only used as anchor for week 0 (first week in dataset)
+        // or when cascade hasn't started (prev not set).
+        // For all other weeks, cascade flows from prev so stock is consistent.
+        // erp_anchor (from recon) corrects the cascade for verified ERP weeks.
+        const opening = wi === 0
+          ? (u.opening_stock ?? 0)
+          : (prev[m.id] ?? u.opening_stock ?? 0);
         const arrived = arrivedLines
           .filter(v => v.material_id === m.id)
           .reduce((s, v) => s + v.qty, 0);
@@ -13009,7 +13013,7 @@
         const tOut = (bTransfers||[]).filter(t => t.from_branch_id === bw[0]?.branch_id && t.from_material_id === m.id && t.week_number === w.week_number).reduce((s,t)=>s+(t.qty||0),0);
 
         const calculated = opening - usage + arrived + unassigned + tIn - tOut;
-        // Priority: 1. closing_stock (admin), 2. erp_stock from recon, 3. calculated
+        // Priority for display: 1. closing_stock (admin), 2. erp_stock from recon, 3. calculated
         const _recon = bRecon && bRecon.find(r => r.week_id === w.id && r.material_id === m.id);
         if (u.closing_stock != null) {
           res[w.id][m.id] = u.closing_stock;
@@ -13020,8 +13024,11 @@
         }
       });
       mats.forEach((m) => {
-        // Cascade from ERP stock if available (most accurate base for next week)
-        prev[m.id] = res[w.id][m.id];
+        const u2 = (ul[w.id] || {})[m.id] || {};
+        // erp_anchor = ERP-verified closing stock for this week (from recon sync).
+        // Use it to reset the cascade so future weeks stay aligned with ERP.
+        // This prevents stale opening_stock values from drifting the cascade.
+        prev[m.id] = (u2.erp_anchor != null) ? u2.erp_anchor : res[w.id][m.id];
       });
     });
     return res;
@@ -15888,7 +15895,6 @@ setOrders(ords);
         });
         const bo = orders.filter((o) => o.branch_id === br.id);
         const bl = orderLines.filter((l) => bo.some((o) => o.id === l.order_id));
-        const sm = computeStocks(bw, ul, bo, bl, bm);
         let ci = bw.length - 1;
         for (let i = bw.length - 1; i >= 0; i--) {
           const u = ul[bw[i].id] || {};
@@ -15897,6 +15903,8 @@ setOrders(ords);
             break;
           }
         }
+        const bReconBr = (reconData||[]).filter(r => r.branch_id === br.id);
+        const sm = computeStocks(bw, ul, bo, bl, bm, undefined, ci, bReconBr);
         const cw = bw[ci];
         if (!cw) return;
         bm.forEach((m) => {
@@ -15979,12 +15987,13 @@ setOrders(ords);
           });
           const bo = orders.filter((o) => o.branch_id === br.id);
           const bl = orderLines.filter((l) => bo.some((o) => o.id === l.order_id));
-          const sm = computeStocks(bw, ul, bo, bl, bm);
           // Use date-based current week to match status page
           const todayStr2 = todayLocal();
           let ci = bw.findIndex(w => w.week_ending >= todayStr2);
           if (ci < 0) ci = bw.length - 1;
           if (ci > 0) ci = ci - 1;
+          const bReconBr2 = (reconData||[]).filter(r => r.branch_id === br.id);
+          const sm = computeStocks(bw, ul, bo, bl, bm, undefined, ci, bReconBr2);
           const cw = bw[ci];
           const ha = cw && bm.some((m) => {
             const s = sm[cw.id]?.[m.id], f = ul[cw.id]?.[m.id]?.forecast_qty || 0;
