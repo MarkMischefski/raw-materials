@@ -226,7 +226,7 @@ function avg6(weeks, wi, matId, ul) {
   return past.reduce((a, b) => a + b, 0) / past.length;
 }
 
-function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers, curIdx) {
+function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers, curIdx, bRecon) {
   if (curIdx === undefined) curIdx = bw.length - 1;
   const res = {}; let prev = {};
   bw.forEach((w, wi) => {
@@ -261,22 +261,32 @@ function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers, curIdx) {
       const forecast = u.forecast_qty || 0;
       const actual = u.actual_qty ?? null;
       const usage = actual != null ? actual : (wi <= curIdx ? 0 : forecast);
-      const opening = (u.opening_stock != null && u.opening_stock !== 0 && wi <= curIdx)
-        ? u.opening_stock
-        : (wi === 0 ? 0 : prev[m.id] ?? 0);
+      const opening = wi === 0
+        ? (u.opening_stock ?? 0)
+        : (prev[m.id] ?? u.opening_stock ?? 0);
       const arrQty = arrived.filter(v => v.material_id === m.id).reduce((s,v) => s + v.qty, 0);
       const tIn  = (bTransfers||[]).filter(t => t.to_branch_id === w.branch_id && t.to_material_id === m.id && t.week_number === w.week_number).reduce((s,t) => s+(t.qty||0), 0);
       const tOut = (bTransfers||[]).filter(t => t.from_branch_id === w.branch_id && t.from_material_id === m.id && t.week_number === w.week_number).reduce((s,t) => s+(t.qty||0), 0);
       const calculated = opening - usage + arrQty + tIn - tOut;
-      res[w.id][m.id] = u.closing_stock != null ? u.closing_stock : calculated;
+      const _mrecon = bRecon && bRecon.find ? bRecon.find(r => r.week_id === w.id && r.material_id === m.id) : null;
+      if (u.closing_stock != null) {
+        res[w.id][m.id] = u.closing_stock;
+      } else if (_mrecon?.erp_stock != null && wi <= curIdx) {
+        res[w.id][m.id] = _mrecon.erp_stock;
+      } else {
+        res[w.id][m.id] = calculated;
+      }
     });
-    mats.forEach(m => { prev[m.id] = res[w.id][m.id]; });
+    mats.forEach(m => {
+      const u2 = (ul[w.id]||{})[m.id]||{};
+      prev[m.id] = (u2.erp_anchor != null) ? u2.erp_anchor : res[w.id][m.id];
+    });
   });
   return res;
 }
 
 // ── App state ──────────────────────────────────────────────────────────────
-let state = { loading: true, error: null, branches: [], mats: [], matTypes: [], weeks: [], usage: [], orders: [], orderLines: [], transfers: [], branch: null, tab: 'alerts' };
+let state = { loading: true, error: null, branches: [], mats: [], matTypes: [], weeks: [], usage: [], orders: [], orderLines: [], transfers: [], recon: [], branch: null, tab: 'alerts' };
 
 async function doRefresh(btn) {
   if (btn) { btn.classList.add('spinning'); }
@@ -295,7 +305,7 @@ async function load(isRefresh) {
       getAll("usage?select=*"),
       get("orders?select=*&order=eta"),
       get("order_lines?select=*&order=order_id").catch(() => []),
-      get("stock_reconciliation?select=*&order=sync_date.desc&limit=500").catch(() => []),
+      getAll("stock_reconciliation?select=*&order=branch_id,material_id,week_id").catch(() => []),
       get("erp_po_lines?select=*&order=synced_at.desc").catch(() => []),
       get("transfers?select=*&order=created_at.desc&limit=50").catch(() => []),
     ]);
@@ -312,7 +322,7 @@ function setTab(t) { state.tab = t; render(); }
 
 // ── Computed helpers ───────────────────────────────────────────────────────
 function getBranchData(br) {
-  const { mats, matTypes, weeks, usage, orders, orderLines, transfers } = state;
+  const { mats, matTypes, weeks, usage, orders, orderLines, transfers, recon } = state;
   const bw = weeks.filter(w => w.branch_id === br.id).sort((a,b) => a.week_number - b.week_number);
   const bMats = mats.filter(m => m.branch_id === br.id).sort((a,b) => a.sort_order - b.sort_order);
   const ul = {};
@@ -329,7 +339,7 @@ function getBranchData(br) {
   if (curIdx < 0) curIdx = bw.length - 1;
   // Step back one to show previous completed week
   if (curIdx > 0) curIdx = curIdx - 1;
-  const stockMap = computeStocks(bw, ul, bOrds, bLines, bMats, bTransfers, curIdx);
+  const stockMap = computeStocks(bw, ul, bOrds, bLines, bMats, bTransfers, curIdx, (recon||[]).filter(r => r.branch_id === br.id));
   return { bw, bMats, ul, bOrds, bLines, bTransfers, curIdx, stockMap };
 }
 
