@@ -15804,8 +15804,14 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
       orderModal && import_react.default.createElement(OrderModal, { key: orderModal.order?.id ?? "new", order: orderModal.order, orderLines: orderModal.lines || [], branchId: branch.id, branches, allMats, materialTypes, suppliers, onClose: () => setOrderModal(null), onSave: saveOrder, onDelete: () => deleteOrder(orderModal.order.id) })
     );
   }
+  // A branch is shown in the app only if it has at least one row in branch_locations
+  // (Settings → Locations). If no mappings exist at all, show every branch.
+  function visibleBranches(allBranches, locs) {
+    const mapped = new Set((locs || []).map((l) => l.branch_id));
+    return mapped.size ? allBranches.filter((b) => mapped.has(b.id)) : allBranches;
+  }
   function App() {
-    const [branches, setBranches] = (0, import_react.useState)([]);
+    const [allBranches, setBranches] = (0, import_react.useState)([]);
     const [allMats, setAllMats] = (0, import_react.useState)([]);
     const [materialTypes, setMaterialTypes] = (0, import_react.useState)([]);
     const [allWeeks, setAllWeeks] = (0, import_react.useState)([]);
@@ -15825,7 +15831,8 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
     const [showForecast, setShowForecast] = (0, import_react.useState)(false);
     const [suppliers, setSuppliers] = (0, import_react.useState)([]);
     const [showAll, setShowAll] = (0, import_react.useState)(false);
-    const load = (0, import_react.useCallback)(async () => {
+    const branches = (0, import_react.useMemo)(() => visibleBranches(allBranches, branchLocations), [allBranches, branchLocations]);
+    const load =(0, import_react.useCallback)(async () => {
       setLoading(true);
       setError(null);
       try {
@@ -15879,7 +15886,8 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
         console.log("[load] rawUsage count:", usage.length, "transfers:", (xfers||[]).length);
 setOrders(ords);
         setOrderLines(lines || []);
-        setBranch((p) => p || br[0]);
+        const vis = visibleBranches(br, locs);
+        setBranch((p) => (p && vis.find((b) => b.id === p.id)) || vis[0]);
         setLoading(false);
       } catch (e) {
         setError(e.message);
@@ -16029,7 +16037,7 @@ setOrders(ords);
       import_react.default.createElement(
         "div",
         { style: { padding: "20px 22px", maxWidth: 1400, margin: "0 auto" } },
-        showAll ? import_react.default.createElement(AllView, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, orders, orderLines, erpPoLines, reconData, role, reload: load, setShowAll }) : showForecast ? import_react.default.createElement(ForecastTool, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, orders, orderLines, erpPoLines, transfers, reconData, reload: load, onClose: () => setShowForecast(false) }) : showSettings ? import_react.default.createElement(SettingsPage, { materialTypes, branches, allMaterials: allMats, suppliers, reload: load , branchLocations, reload: load }) : branch && import_react.default.createElement(BranchView, { key: branch.id, branch, branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, reconData, erpPoLines, orders, orderLines, activeTab, setActiveTab, role, reload: load })
+        showAll ? import_react.default.createElement(AllView, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, orders, orderLines, erpPoLines, reconData, role, reload: load, setShowAll }) : showForecast ? import_react.default.createElement(ForecastTool, { branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, orders, orderLines, erpPoLines, transfers, reconData, reload: load, onClose: () => setShowForecast(false) }) : showSettings ? import_react.default.createElement(SettingsPage, { materialTypes, branches: allBranches, allMaterials: allMats, suppliers, reload: load , branchLocations, reload: load }) : branch && import_react.default.createElement(BranchView, { key: branch.id, branch, branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, transfers, reconData, erpPoLines, orders, orderLines, activeTab, setActiveTab, role, reload: load })
       )
     );
   }

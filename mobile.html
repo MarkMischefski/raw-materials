@@ -297,7 +297,7 @@ async function doRefresh(btn) {
 async function load(isRefresh) {
   if (!isRefresh) { state.loading = true; render(); }
   try {
-    const [branches, mats, matTypes, weeks, usage, orders, orderLines, recon, erpPoLines, transfers] = await Promise.all([
+    const [allBranches, mats, matTypes, weeks, usage, orders, orderLines, recon, erpPoLines, transfers, branchLocs] = await Promise.all([
       get("branches?select=*&order=sort_order"),
       get("materials?select=*&order=sort_order"),
       get("material_types?select=*&order=sort_order").catch(() => []),
@@ -308,8 +308,13 @@ async function load(isRefresh) {
       getAll("stock_reconciliation?select=*&order=branch_id,material_id,week_id").catch(() => []),
       get("erp_po_lines?select=*&order=synced_at.desc").catch(() => []),
       get("transfers?select=*&order=created_at.desc&limit=50").catch(() => []),
+      get("branch_locations?select=branch_id").catch(() => []),
     ]);
-    state = { ...state, loading: false, error: null, branches, mats, matTypes, weeks, usage, orders, orderLines, recon: recon||[], erpPoLines: erpPoLines||[], transfers, branch: state.branch || branches[0] };
+    // Same rule as desktop.html visibleBranches(): only branches with a location mapping (all if none mapped)
+    const mapped = new Set((branchLocs || []).map(l => l.branch_id));
+    const branches = mapped.size ? allBranches.filter(b => mapped.has(b.id)) : allBranches;
+    const branch = (state.branch && branches.find(b => b.id === state.branch.id)) || branches[0];
+    state = { ...state, loading: false, error: null, branches, mats, matTypes, weeks, usage, orders, orderLines, recon: recon||[], erpPoLines: erpPoLines||[], transfers, branch };
     render();
   } catch(e) {
     state = { ...state, loading: false, error: e.message };
