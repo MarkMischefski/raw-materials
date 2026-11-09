@@ -15645,7 +15645,8 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                   const hasErp = erp.length > 0;
                   const supTotal = erp.reduce((s,l)=>s+(l.sup_quant||0),0);
                   const ordTotal = erp.reduce((s,l)=>s+(l.ord_quant||0),0);
-                  const allRcvd = hasErp && supTotal >= ordTotal;
+                  // Per line: an over-receipted line must not mask a short one
+                  const allRcvd = hasErp && erp.every(l => (l.sup_quant||0) >= (l.ord_quant||0));
                   const partRcvd = hasErp && supTotal > 0 && !allRcvd;
                   const noErp = !hasErp && o.po_ref && !o.is_forecast && String(o.po_ref).trim().length > 3;
                   return import_react.default.createElement("td", { style: { padding: "7px 8px", whiteSpace: "nowrap" } },
@@ -15737,7 +15738,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                     const hasZ = erpZ.length > 0;
                     const supZ = erpZ.reduce((s,l)=>s+(l.sup_quant||0),0);
                     const ordZ = erpZ.reduce((s,l)=>s+(l.ord_quant||0),0);
-                    const allZ = hasZ && supZ >= ordZ;
+                    const allZ = hasZ && erpZ.every(l => (l.sup_quant||0) >= (l.ord_quant||0));
                     const partZ = hasZ && supZ > 0 && !allZ;
                     const noZ = !hasZ && o.po_ref && !o.is_forecast && String(o.po_ref).trim().length > 3;
                     if (!hasZ && !noZ) return null;
@@ -16620,7 +16621,7 @@ setOrders(ords);
                     const hasAV = erpAV.length > 0;
                     const supAV = erpAV.reduce((s,l)=>s+(l.sup_quant||0),0);
                     const ordAV = erpAV.reduce((s,l)=>s+(l.ord_quant||0),0);
-                    const allAV = hasAV && supAV >= ordAV;
+                    const allAV = hasAV && erpAV.every(l => (l.sup_quant||0) >= (l.ord_quant||0));
                     const partAV = hasAV && supAV > 0 && !allAV;
                     const noAV = !hasAV && o.po_ref && !o.is_forecast && String(o.po_ref).trim().length > 3;
                     return import_react.default.createElement("td", { style: { padding: "7px 8px", whiteSpace: "nowrap" } },

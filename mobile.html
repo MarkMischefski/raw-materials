@@ -614,7 +614,7 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
     const hasErp = erpMatch.length > 0;
     const supQ = erpMatch.reduce((s,l)=>s+(l.sup_quant||0),0);
     const ordQ = erpMatch.reduce((s,l)=>s+(l.ord_quant||0),0);
-    const allSup = hasErp && supQ >= ordQ;
+    const allSup = hasErp && erpMatch.every(l => (l.sup_quant||0) >= (l.ord_quant||0));
     const partSup = hasErp && supQ > 0 && !allSup;
     const erpBadge = hasErp
       ? `<span style="font-size:10px;border-radius:3px;padding:1px 5px;background:${allSup?"#10b98122":partSup?"#f59e0b22":"#1f6feb22"};color:${allSup?"#10b981":partSup?"#f59e0b":"#58a6ff"}">${allSup?"✓ Sup":partSup?"⚡ Part":"✓ ERP"}</span>`
