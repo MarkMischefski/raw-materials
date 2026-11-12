@@ -207,6 +207,15 @@ async function getAll(path) {
   return all;
 }
 
+// Display week number: restarts at 1 for the first week ending in January (same as desktop.html).
+// week_number itself is a running key (transfers match on it) and is never changed.
+function wkNo(w) {
+  const we = w && w.week_ending ? String(w.week_ending).slice(0, 10) : "";
+  if (!we) return w ? w.week_number : "";
+  const d = Date.parse(we + "T00:00:00Z"), y = +we.slice(0, 4);
+  return Math.floor((d - Date.UTC(y, 0, 1)) / 864e5 / 7) + 1;
+}
+
 function stockStatus(s, f) {
   if (s == null) return null;
   if (s < 0) return "critical";
@@ -229,11 +238,33 @@ function avg6(weeks, wi, matId, ul) {
 function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers, curIdx, bRecon) {
   if (curIdx === undefined) curIdx = bw.length - 1;
   const res = {}; let prev = {};
+  // Unreceived qty with ETA on/before the last completed week goes into the live week
+  // (curIdx+1) instead of a past week, where the ERP anchor would wipe it. Recorded per
+  // material (non-forecast orders) so the live-week cell can flag it. Same as desktop.html.
+  const overdueCutoff = bw[curIdx]?.week_ending || "";
+  const liveWk = bw[curIdx + 1] || bw[curIdx];
+  const placeUnreceived = (eta) => (eta && liveWk && eta <= overdueCutoff) ? liveWk.week_ending : eta;
+  const overdue = {};
+  {
+    const om = {};
+    (bOrds||[]).forEach(o => { om[o.id] = o; });
+    (bLines||[]).forEach(l => {
+      const o = om[l.order_id];
+      if (!o || o.is_forecast || l.received || !+l.qty || !l.material_id) return;
+      const eta = (l.eta || o.eta || "").slice(0,10);
+      if (!eta || eta > overdueCutoff) return;
+      const sup = l.sup_quant || 0;
+      const out = sup > 0 && sup < l.qty ? l.qty - sup : (sup >= l.qty ? 0 : l.qty);
+      if (out > 0) overdue[l.material_id] = (overdue[l.material_id] || 0) + out;
+    });
+  }
+  Object.defineProperty(res, "_overdue", { value: overdue, enumerable: false });
+  Object.defineProperty(res, "_overdueWeekId", { value: liveWk?.id, enumerable: false });
   bw.forEach((w, wi) => {
     res[w.id] = {};
     const pWEstr = wi > 0 ? bw[wi-1].week_ending : "2000-01-01";
     const tWEstr = w.week_ending;
-    const nonFcst = (bOrds||[]).filter(o => !o.is_forecast);
+    const nonFcst = (bOrds||[]);  // forecast orders count in stock calcs (same as desktop)
     const ordMapMob = {};
     (bOrds||[]).forEach(o => { ordMapMob[o.id] = o; });
     const virtualArrMob = [];
@@ -250,9 +281,9 @@ function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers, curIdx, bRecon) 
       } else if (sup > 0 && sup < (l.qty||0)) {
         const rd = l.received_date ? l.received_date.slice(0,10) : (bw[curIdx+1]||bw[curIdx])?.week_ending;
         if (rd) virtualArrMob.push({ material_id: l.material_id, qty: sup, date: rd });
-        if (lEta) virtualArrMob.push({ material_id: l.material_id, qty: l.qty - sup, date: lEta });
+        if (lEta) virtualArrMob.push({ material_id: l.material_id, qty: l.qty - sup, date: placeUnreceived(lEta) });
       } else {
-        if (lEta) virtualArrMob.push({ material_id: l.material_id, qty: l.qty, date: lEta });
+        if (lEta) virtualArrMob.push({ material_id: l.material_id, qty: l.qty, date: placeUnreceived(lEta) });
       }
     });
     const arrived = virtualArrMob.filter(v => v.date > pWEstr && v.date <= tWEstr);
@@ -398,7 +429,7 @@ function renderShell() {
 
   // Always update week badge
   const wb = document.getElementById("week-badge");
-  if (wb) wb.textContent = curWk ? `Wk ${curWk.week_number} · w/e ${fmtDate(curWk.week_ending)}` : "";
+  if (wb) wb.textContent = curWk ? `Wk ${wkNo(curWk)} · w/e ${fmtDate(curWk.week_ending)}` : "";
 
   // Update branch tabs
   const bt = document.getElementById("branch-tabs");
@@ -660,7 +691,7 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
       ${fcstAlerts.map(a => `<div class="alert-row"><strong>${a.m.name}</strong>: ${N(a.fc)}/wk forecast vs ${N(Math.round(a.av))}/wk avg <span class="var-chip ${a.pct>0?"over":"under"}">${a.pct>0?"+":""}${a.pct}%</span></div>`).join("")}
     </div>` : ""}
     <div class="card">
-      <div class="card-header">Current Stock — Wk ${curWk.week_number}</div>
+      <div class="card-header">Current Stock — Wk ${wkNo(curWk)}</div>
       <div style="padding:10px 10px;"><div class="status-grid">${tiles}</div></div>
     </div>
     <div class="card">
@@ -672,7 +703,7 @@ function renderStatus({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, branch }
 
 function renderLog({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, showFcst }) {
   const winS = Math.max(0, curIdx - 4);
-  const winE = Math.min(bw.length - 1, curIdx + 8);
+  const winE = Math.min(bw.length - 1, curIdx + 10);
   const dispWks = bw.slice(winS, winE + 1);
 
   const rows = dispWks.map(w => {
@@ -680,7 +711,7 @@ function renderLog({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, showFcst })
     const isCur = wi === curIdx, isFut = wi > curIdx;
     const u = ul[w.id] || {};
     return `<tr class="${isCur?"current":isFut?"future":""}">
-      <td style="font-weight:${isCur?800:400};color:${isCur?"#58a6ff":"inherit"}">${w.week_number}</td>
+      <td style="font-weight:${isCur?800:400};color:${isCur?"#58a6ff":"inherit"}">${wkNo(w)}</td>
       <td style="color:var(--muted)">${fmtDate(w.week_ending)}</td>
       ${showFcst ? bMats.map(m => {
         const fc = u[m.id]?.forecast_qty ?? 0;
@@ -702,6 +733,8 @@ function renderLog({ bw, bMats, ul, bOrds, bLines, curIdx, stockMap, showFcst })
         return `<td style="${cellBgM}color:${isHist?"var(--muted)":st==="critical"?"var(--critical)":st==="low"?"var(--low)":"var(--green)"};font-weight:${isHist?400:600}">
           ${N(s)}${isFut?"<span style='color:var(--dim);font-size:10px'>~</span>":""}
           ${!isHist&&(st==="critical"||st==="low")?`<span class="pill ${st}">${st}</span>`:""}
+          ${(() => { const od = w.id === stockMap._overdueWeekId ? stockMap._overdue?.[m.id] : 0;
+            return od ? `<div style="font-size:9px;font-weight:400;color:#f59e0b;white-space:nowrap">incl. ${N(od)} overdue, not rcvd</div>` : ""; })()}
         </td>`;
       }).join("")}
     </tr>`;

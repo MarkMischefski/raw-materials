@@ -12908,6 +12908,18 @@
     const dt = new Date(d);
     return isNaN(dt) ? d : `${dt.getDate()} ${MONTHS[dt.getMonth()]}`;
   };
+  // Display week number: restarts at 1 for the first week ending in January.
+  // week_number itself is a running key (transfers match on it) and is never changed.
+  var wkNo = (w) => {
+    const we = w && w.week_ending ? String(w.week_ending).slice(0, 10) : "";
+    if (!we) return w ? w.week_number : "";
+    const d = Date.parse(we + "T00:00:00Z"), y = +we.slice(0, 4);
+    return Math.floor((d - Date.UTC(y, 0, 1)) / 864e5 / 7) + 1;
+  };
+  var wkOfNum = (n, weeks) => {
+    const w = (weeks || []).find((x) => x.week_number === +n);
+    return w ? wkNo(w) : n;
+  };
   function stockStatus(s, f) {
     if (s == null) return null;
     if (s < 0) return "critical";
@@ -12934,6 +12946,29 @@
     if (curIdx === undefined) curIdx = bw.length - 1;
     const res = {};
     let prev = {};
+    // Unreceived qty whose ETA is on/before the last completed week (bw[curIdx]) has not
+    // arrived. Placing it in a past week lets the ERP anchor wipe it out, so it never reaches
+    // the forecast. Move it into the live week (curIdx+1) instead, and record it per material
+    // (non-forecast orders only) so the live-week cell can flag it as overdue.
+    const overdueCutoff = bw[curIdx]?.week_ending || "";
+    const liveWk = bw[curIdx + 1] || bw[curIdx];
+    const placeUnreceived = (eta) => (eta && liveWk && eta <= overdueCutoff) ? liveWk.week_ending : eta;
+    const overdue = {};
+    {
+      const om = {};
+      (bOrds || []).forEach(o => { om[o.id] = o; });
+      (bLines2 || []).forEach(l => {
+        const o = om[l.order_id];
+        if (!o || o.is_forecast || l.received || !+l.qty || !l.material_id) return;
+        const eta = (l.eta || o.eta || "").slice(0, 10);
+        if (!eta || eta > overdueCutoff) return;
+        const sup = l.sup_quant || 0;
+        const out = sup > 0 && sup < l.qty ? l.qty - sup : (sup >= l.qty ? 0 : l.qty);
+        if (out > 0) overdue[l.material_id] = (overdue[l.material_id] || 0) + out;
+      });
+    }
+    Object.defineProperty(res, "_overdue", { value: overdue, enumerable: false });
+    Object.defineProperty(res, "_overdueWeekId", { value: liveWk?.id, enumerable: false });
     bw.forEach((w, wi) => {
       res[w.id] = {};
       const pWE = wi > 0 ? new Date(bw[wi - 1].week_ending) : /* @__PURE__ */ new Date("2000-01-01");
@@ -12979,11 +13014,11 @@
               ? l.received_date.slice(0, 10)
               : (bw[curIdx + 1] || bw[curIdx])?.week_ending;
             if (rcvdDate) virtualArrivals.push({ material_id: l.material_id, qty: sup, date: rcvdDate });
-            // Outstanding portion: stays at original ETA
-            if (lineEta) virtualArrivals.push({ material_id: l.material_id, qty: l.qty - sup, date: lineEta });
+            // Outstanding portion: original ETA, or live week if that ETA has already passed
+            if (lineEta) virtualArrivals.push({ material_id: l.material_id, qty: l.qty - sup, date: placeUnreceived(lineEta) });
           } else {
-            // Fully pending — full qty at ETA
-            if (lineEta) virtualArrivals.push({ material_id: l.material_id, qty: l.qty, date: lineEta });
+            // Fully pending — full qty at ETA, or live week if that ETA has already passed
+            if (lineEta) virtualArrivals.push({ material_id: l.material_id, qty: l.qty, date: placeUnreceived(lineEta) });
           }
         });
 
@@ -13725,7 +13760,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
     }
     return import_react.default.createElement(
       Modal,
-      { title: order ? "Edit Order" : "New Purchase Order", onClose, width: 580 },
+      { title: order ? (hdr.is_forecast ? "Edit Forecast Order" : "Edit Order") : (hdr.is_forecast ? "New Forecast Order" : "New Purchase Order"), onClose, width: 580 },
       // Header
       import_react.default.createElement(
         "div",
@@ -13930,6 +13965,17 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
           }),
           "Mark as Received",
           import_react.default.createElement("span", { style: { fontSize: 11, color: "#484f58", marginLeft: 4 } }, "(applies to all lines)")
+        ),
+        (!order?.po_ref || order?.is_forecast) && import_react.default.createElement(
+          "label",
+          { style: { display: "flex", alignItems: "center", gap: 8, color: hdr.is_forecast ? "#a78bfa" : "#8b949e", fontSize: 13, cursor: "pointer", marginTop: 6 } },
+          import_react.default.createElement("input", {
+            type: "checkbox",
+            checked: !!hdr.is_forecast,
+            onChange: (e) => setH("is_forecast", e.target.checked)
+          }),
+          "Forecast order",
+          import_react.default.createElement("span", { style: { fontSize: 11, color: "#484f58", marginLeft: 4 } }, "(planned, not yet placed — counts in projected stock)")
         )
       ),
       import_react.default.createElement(
@@ -14064,7 +14110,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
         { key: i },
         import_react.default.createElement("line", { x1: xS(i), y1: PT + cH, x2: xS(i), y2: PT + cH + 4, stroke: "#21262d" }),
         import_react.default.createElement("text", { x: xS(i), y: PT + cH + 13, fontSize: 9, fill: "#8b949e", textAnchor: "middle" }, fmtDate(w.week_ending)),
-        import_react.default.createElement("text", { x: xS(i), y: PT + cH + 23, fontSize: 8, fill: "#484f58", textAnchor: "middle" }, `w${w.week_number}`)
+        import_react.default.createElement("text", { x: xS(i), y: PT + cH + 23, fontSize: 8, fill: "#484f58", textAnchor: "middle" }, `w${wkNo(w)}`)
       )),
       mats.map((m, mi) => import_react.default.createElement(
         import_react.Fragment,
@@ -14087,7 +14133,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
     }
     return import_react.default.createElement(
       Modal,
-      { title: `Enter Usage \u2014 Wk ${week.week_number} (w/e ${fmtDate(week.week_ending)})`, onClose, width: 420 },
+      { title: `Enter Usage \u2014 Wk ${wkNo(week)} (w/e ${fmtDate(week.week_ending)})`, onClose, width: 420 },
       mats.map((m) => import_react.default.createElement(
         Field,
         { key: m.id, label: `${m.name} (kg)` },
@@ -14136,7 +14182,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
     }
     return import_react.default.createElement(
       Modal,
-      { title: `Update Forecast \u2014 Wk ${week.week_number}`, onClose, width: 480 },
+      { title: `Update Forecast \u2014 Wk ${wkNo(week)}`, onClose, width: 480 },
       import_react.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" } },
         import_react.default.createElement(
           "label",
@@ -14154,7 +14200,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
             placeholder: "—"
           }),
           import_react.default.createElement("span", { style: { color: "#8b949e", fontSize: 12 } },
-            numWeeks ? `weeks from Wk ${week.week_number}` : "weeks (overrides above)"
+            numWeeks ? `weeks from Wk ${wkNo(week)}` : "weeks (overrides above)"
           )
         )
       ),
@@ -14220,17 +14266,55 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
       )
     );
   }
+  // Forecast tool settings survive the remount that reload() causes after saving a draft
+  var fcToolMemo = { bufferWks: 2, selectedBr: null, dueDate: null, savedAt: null };
   function ForecastTool({ branches, allMats, materialTypes, suppliers, allWeeks, rawUsage, orders, orderLines, transfers, reconData, reload, onClose }) {
-    const todayStr = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-    const [dueDate, setDueDate] = (0, import_react.useState)(() => {
+    const h = import_react.default.createElement;
+    const etaOf = (l, o) => ((l && l.eta) || (o && o.eta) || "").slice(0, 10);
+    // Open forecast orders ARE the draft: they count in stock calcs everywhere, and this tool
+    // reads them back in and edits them in place. Suggestions below ignore them.
+    const draftOrders = (0, import_react.useMemo)(
+      () => orders.filter((o) => o.is_forecast && !o.received && branches.some((b) => b.id === o.branch_id)),
+      [orders, branches]
+    );
+    const draftDates = (0, import_react.useMemo)(() => {
+      const c = {};
+      draftOrders.forEach((o) => {
+        const ls = orderLines.filter((l) => l.order_id === o.id);
+        new Set(ls.length ? ls.map((l) => etaOf(l, o)) : [etaOf(null, o)]).forEach((d) => { if (d) c[d] = (c[d] || 0) + 1; });
+      });
+      return Object.entries(c).sort(([a], [b]) => a < b ? -1 : 1);
+    }, [draftOrders, orderLines]);
+    const [dueDate, setDueDateRaw] = (0, import_react.useState)(() => {
+      if (fcToolMemo.dueDate) return fcToolMemo.dueDate;
+      if (draftDates.length) return draftDates[0][0];
       const d = /* @__PURE__ */ new Date();
       d.setDate(d.getDate() + 28);
       return d.toISOString().slice(0, 10);
     });
-    const [bufferWks, setBufferWks] = (0, import_react.useState)(2);
-    const [selectedBr, setSelectedBr] = (0, import_react.useState)(() => Object.fromEntries(branches.map((b) => [b.id, true])));
-    const [creating, setCreating] = (0, import_react.useState)(false);
-    const [created, setCreated] = (0, import_react.useState)(false);
+    const [bufferWks, setBufferWks] = (0, import_react.useState)(fcToolMemo.bufferWks || 2);
+    const [selectedBr, setSelectedBr] = (0, import_react.useState)(() => fcToolMemo.selectedBr || Object.fromEntries(branches.map((b) => [b.id, true])));
+    const [edits, setEdits] = (0, import_react.useState)({});     // unsaved qty overrides, key -> qty
+    const [pinned, setPinned] = (0, import_react.useState)({});   // rows added/edited this session stay in the table
+    const [saving, setSaving] = (0, import_react.useState)(false);
+    const [savedAt, setSavedAt] = (0, import_react.useState)(fcToolMemo.savedAt);
+    import_react.default.useEffect(() => {
+      fcToolMemo.bufferWks = bufferWks;
+      fcToolMemo.selectedBr = selectedBr;
+      fcToolMemo.dueDate = dueDate;
+    }, [bufferWks, selectedBr, dueDate]);
+    const setDueDate = (d) => {
+      setDueDateRaw(d);
+      setEdits({});
+      setPinned({});
+      setSavedAt(null);
+      fcToolMemo.savedAt = null;
+    };
+    const close = () => {
+      fcToolMemo.dueDate = null;
+      fcToolMemo.savedAt = null;
+      onClose();
+    };
     const results = (0, import_react.useMemo)(() => {
       if (!dueDate) return [];
       const out = [];
@@ -14268,7 +14352,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
         if (!dueWk) return;
         mats.forEach((m) => {
           const mt = materialTypes.find((t) => t.id === m.material_type_id);
-          const projStock = stockMap[dueWk.id]?.[m.id] ?? 0;   // stock when order arrives
+          const projStock = stockMap[dueWk.id]?.[m.id] ?? 0;   // stock when order arrives (excl. forecast drafts)
           // Sum actual forecasts for the bufferWks weeks after due date
           const required = (() => {
             let total = 0;
@@ -14279,51 +14363,65 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
             if (total === 0) total = ((ul[bw[curIdx]?.id] || {})[m.id]?.forecast_qty || 0) * bufferWks;
             return total;
           })();
-          const shortfall = required - projStock;                // gap to fill
-          let rawQty = shortfall > 0 ? shortfall : 0;
-          let orderQty = rawQty;
-          if (orderQty > 0) {
-            if (mt?.container_qty > 0) orderQty = Math.ceil(orderQty / mt.container_qty) * mt.container_qty;
-            else if (mt?.bag_qty > 0) orderQty = Math.ceil(orderQty / mt.bag_qty) * mt.bag_qty;
+          const shortfall = required - projStock;
+          let suggested = shortfall > 0 ? shortfall : 0;
+          if (suggested > 0) {
+            if (mt?.container_qty > 0) suggested = Math.ceil(suggested / mt.container_qty) * mt.container_qty;
+            else if (mt?.bag_qty > 0) suggested = Math.ceil(suggested / mt.bag_qty) * mt.bag_qty;
           }
-          out.push({
-            br,
-            m,
-            mt,
-            projStock,
-            required,
-            shortfall,
-            rawQty,
-            orderQty,
-            targetWk: dueWk,
-            forecast: (ul[bw[curIdx]?.id] || {})[m.id]?.forecast_qty || 0,
-            supplier: mt?.preferred_supplier || null
-          });
+          out.push({ br, m, mt, projStock, required, shortfall, suggested, targetWk: dueWk, supplier: mt?.preferred_supplier || null });
         });
       });
       return out;
-    }, [dueDate, bufferWks, selectedBr, branches, allMats, materialTypes, allWeeks, rawUsage, orders, orderLines]);
-    const [editQtys, setEditQtys] = (0, import_react.useState)({});
-    import_react.default.useEffect(() => {
-      const init = {};
-      results.forEach((r) => {
-        init[`${r.br.id}_${r.m.id}`] = r.orderQty;
+    }, [dueDate, bufferWks, selectedBr, branches, allMats, materialTypes, allWeeks, rawUsage, orders, orderLines, transfers, reconData]);
+    // Saved draft lines due on dueDate, by branch+material
+    const draftMap = (0, import_react.useMemo)(() => {
+      const map = {};
+      draftOrders.forEach((o) => {
+        if (!selectedBr[o.branch_id]) return;
+        orderLines.filter((l) => l.order_id === o.id && l.material_id && etaOf(l, o) === dueDate).forEach((l) => {
+          const k = `${o.branch_id}_${l.material_id}`;
+          if (!map[k]) map[k] = { qty: 0, lines: [], supplier: o.supplier || null };
+          map[k].qty += +l.qty || 0;
+          map[k].lines.push({ l, o });
+        });
       });
-      setEditQtys(init);
-    }, [results.map(r => `${r.br.id}_${r.m.id}_${r.orderQty}`).join(","), dueDate, bufferWks]);
-    const getQty = (r) => editQtys[`${r.br.id}_${r.m.id}`] ?? r.orderQty;
-    const setQty = (r, v) => setEditQtys((p) => ({ ...p, [`${r.br.id}_${r.m.id}`]: +v || 0 }));
-    const needsOrder = results.filter((r) => getQty(r) > 0);
-    const sufficient = results.filter((r) => getQty(r) === 0);
-    const supplierGroups = (0, import_react.useMemo)(() => {
-      const g = {};
-      needsOrder.forEach((r) => {
-        const key = r.supplier || "Unassigned";
-        if (!g[key]) g[key] = [];
-        g[key].push(r);
-      });
-      return g;
-    }, [needsOrder, editQtys]);
+      return map;
+    }, [draftOrders, orderLines, dueDate, selectedBr]);
+    const draftBr = (0, import_react.useMemo)(() => {
+      const s = {};
+      Object.values(draftMap).forEach((d) => { s[d.lines[0].o.branch_id] = true; });
+      return s;
+    }, [draftMap]);
+    const keyOf = (r) => `${r.br.id}_${r.m.id}`;
+    const savedQty = (r) => draftMap[keyOf(r)]?.qty || 0;
+    const supplierOf = (r) => draftMap[keyOf(r)]?.supplier || r.supplier;
+    // Qty shown: unsaved edit, else saved draft, else suggestion (only when the branch has no draft yet)
+    const getQty = (r) => {
+      const k = keyOf(r);
+      if (edits[k] != null) return edits[k];
+      if (draftMap[k]) return draftMap[k].qty;
+      return draftBr[r.br.id] ? 0 : r.suggested;
+    };
+    const setQty = (r, v) => {
+      const k = keyOf(r);
+      setEdits((p) => ({ ...p, [k]: Math.max(0, +v || 0) }));
+      setPinned((p) => ({ ...p, [k]: true }));
+    };
+    const stepOf = (r) => r.mt?.container_qty > 0 ? r.mt.container_qty * 0.5 : 1000;
+    const useSuggested = (rows) => {
+      setEdits((p) => { const n = { ...p }; rows.forEach((r) => { n[keyOf(r)] = r.suggested; }); return n; });
+      setPinned((p) => { const n = { ...p }; rows.forEach((r) => { n[keyOf(r)] = true; }); return n; });
+    };
+    const inPlan = results.filter((r) => r.suggested > 0 || savedQty(r) > 0 || getQty(r) > 0 || pinned[keyOf(r)]);
+    const others = results.filter((r) => !inPlan.includes(r));
+    const dirty = results.some((r) => getQty(r) !== savedQty(r));
+    const hasDraft = Object.keys(draftMap).length > 0;
+    const supplierGroups = {};
+    inPlan.forEach((r) => {
+      const key = supplierOf(r) || "Unassigned";
+      (supplierGroups[key] = supplierGroups[key] || []).push(r);
+    });
     function getMixSummary(rows) {
       if (rows.length < 2) return null;
       const containers = new Set(rows.map((r) => r.mt?.container_qty).filter(Boolean));
@@ -14333,275 +14431,293 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
       if (!bagQty) return null;
       const bagsPerContainer = cqty / bagQty;
       const totalBags = rows.reduce((s, r) => s + Math.round(getQty(r) / bagQty), 0);
+      if (!totalBags) return null;
       const totalContainers = Math.ceil(totalBags / bagsPerContainer);
       const totalKg = totalContainers * cqty;
       return { totalContainers, totalKg, bagsPerContainer, bagQty, cqty };
     }
-    async function createOrders() {
-      if (!dueDate) { alert("Please set a due date first."); return; }
-      if (needsOrder.length === 0) { alert("No orders to create."); return; }
-
-      // Build grouped orders: one order per branch+supplier combo
-      const groups = {};
-      for (const r of needsOrder) {
-        const qty = getQty(r);
-        if (qty <= 0) continue;
-        const key = r.br.id + "||" + (r.supplier || "");
-        if (!groups[key]) groups[key] = { br: r.br, supplier: r.supplier, lines: [] };
-        groups[key].lines.push({ r, qty });
+    // Recalculate header qty/material of touched orders; delete any left with no lines
+    async function tidyOrders(ids) {
+      for (const id of ids) {
+        const ls = await dbGet(`order_lines?select=id,material_id,material_type_id,qty&order_id=eq.${id}`);
+        if (!ls.length) {
+          await dbDel(`orders?id=eq.${id}`);
+          continue;
+        }
+        await dbPatch(`orders?id=eq.${id}`, {
+          qty: ls.reduce((s, l) => s + (+l.qty || 0), 0),
+          material_id: ls.length === 1 ? ls[0].material_id : null,
+          material_type_id: ls.length === 1 ? ls[0].material_type_id : null
+        });
       }
-
-      // Check for fractional containers — warn only if the ORDER total is not whole containers
+    }
+    function markSaved() {
+      const t = (/* @__PURE__ */ new Date()).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      fcToolMemo.savedAt = t;
+      setSavedAt(t);
+    }
+    async function saveDraft() {
+      if (!dueDate) { alert("Please set a due date first."); return; }
+      // Warn only if a branch+supplier order total is not whole containers
+      const groups = {};
+      inPlan.forEach((r) => {
+        const qty = getQty(r);
+        if (qty <= 0) return;
+        const k = r.br.id + "||" + (supplierOf(r) || "");
+        (groups[k] = groups[k] || { br: r.br, supplier: supplierOf(r), lines: [] }).lines.push({ r, qty });
+      });
       const warnings = [];
       for (const g of Object.values(groups)) {
-        // Find the container_qty for this group (use first line's type)
         const cqty = g.lines[0]?.r?.mt?.container_qty;
         if (!cqty || cqty <= 0) continue;
-        const totalContainers = g.lines.reduce((s, { r, qty }) => s + qty / cqty, 0);
+        const totalContainers = g.lines.reduce((s, { qty }) => s + qty / cqty, 0);
         if (Math.abs(totalContainers - Math.round(totalContainers)) > 0.01) {
-          const lineDetail = g.lines.map(({ r, qty }) => "  " + r.m.name + ": " + qty.toLocaleString() + " kg (" + (qty/cqty).toFixed(2) + " containers)").join("\n");
+          const lineDetail = g.lines.map(({ r, qty }) => "  " + r.m.name + ": " + qty.toLocaleString() + " kg (" + (qty / cqty).toFixed(2) + " containers)").join("\n");
           warnings.push((g.supplier || "Unassigned") + " → " + g.br.name + ": " + totalContainers.toFixed(2) + " containers total\n" + lineDetail);
         }
       }
-      if (warnings.length > 0) {
-        const proceed = confirm("Warning — fractional containers:\n\n" + warnings.join("\n") + "\n\nProceed anyway?");
-        if (!proceed) return;
-      }
-
-      setCreating(true);
+      if (warnings.length > 0 && !confirm("Warning — fractional containers:\n\n" + warnings.join("\n") + "\n\nSave anyway?")) return;
+      setSaving(true);
       try {
-        for (const g of Object.values(groups)) {
-          const totalQty = g.lines.reduce((s, l) => s + l.qty, 0);
-          const note = "Forecast order \u2014 " + fmtDate(dueDate) + " + " + bufferWks + "wk buffer";
-          // Create one order per branch+supplier
-          const [newOrd] = await dbPost("orders", {
-            branch_id: g.br.id,
-            supplier: g.supplier || null,
-            material_id: g.lines.length === 1 ? g.lines[0].r.m.id : null,
-            material_type_id: g.lines.length === 1 ? (g.lines[0].r.mt?.id || null) : null,
-            qty: totalQty,
-            price_per_kg: null,
-            eta: dueDate,
-            received: false,
-            notes: note,
-            is_forecast: true,
-            po_ref: null
-          });
-          // Create one line per material
-          for (const { r, qty } of g.lines) {
-            await dbPost("order_lines", {
-              order_id: newOrd.id,
-              material_id: r.m.id,
-              material_type_id: r.mt?.id || null,
-              qty,
-              eta: dueDate,
-              received: false
-            });
+        const touched = new Set();
+        const groupOrd = {};
+        const note = "Forecast order — " + fmtDate(dueDate) + " + " + bufferWks + "wk buffer";
+        for (const r of results) {
+          const k = keyOf(r), q = getQty(r), d = draftMap[k];
+          if (d) {
+            // Existing draft: keep one line at the new qty, drop duplicates
+            const [first, ...rest] = d.lines;
+            if (q > 0) {
+              if (+first.l.qty !== q) { await dbPatch(`order_lines?id=eq.${first.l.id}`, { qty: q }); touched.add(first.o.id); }
+            } else {
+              await dbDel(`order_lines?id=eq.${first.l.id}`);
+              touched.add(first.o.id);
+            }
+            for (const x of rest) {
+              await dbDel(`order_lines?id=eq.${x.l.id}`);
+              touched.add(x.o.id);
+            }
+          } else if (q > 0) {
+            // New line: add to this branch+supplier's forecast order for dueDate, creating it if needed
+            const sup = supplierOf(r) || null;
+            const gk = r.br.id + "||" + (sup || "");
+            let ordId = groupOrd[gk] || draftOrders.find((o) => o.branch_id === r.br.id && (o.supplier || "") === (sup || "") && etaOf(null, o) === dueDate)?.id;
+            if (!ordId) {
+              const [no] = await dbPost("orders", {
+                branch_id: r.br.id, supplier: sup, material_id: null, material_type_id: null, qty: 0,
+                price_per_kg: null, eta: dueDate, received: false, notes: note, is_forecast: true, po_ref: null
+              });
+              ordId = no.id;
+            }
+            groupOrd[gk] = ordId;
+            await dbPost("order_lines", { order_id: ordId, material_id: r.m.id, material_type_id: r.mt?.id || null, qty: q, eta: dueDate, received: false });
+            touched.add(ordId);
           }
         }
-        setCreated(true);
-        reload();
+        await tidyOrders(touched);
+        markSaved();
+        if (touched.size) reload();
       } catch (e) {
-        alert("Error creating orders: " + e.message);
+        alert("Error saving forecast draft: " + e.message);
       } finally {
-        setCreating(false);
+        setSaving(false);
       }
     }
-    if (created) return import_react.default.createElement(
+    async function discardDraft() {
+      const lines = Object.values(draftMap).flatMap((d) => d.lines);
+      if (!lines.length) return;
+      if (!confirm(`Delete all ${lines.length} forecast line${lines.length !== 1 ? "s" : ""} due ${fmtDate(dueDate)} for the selected branches?`)) return;
+      setSaving(true);
+      try {
+        const touched = new Set();
+        for (const { l, o } of lines) {
+          await dbDel(`order_lines?id=eq.${l.id}`);
+          touched.add(o.id);
+        }
+        await tidyOrders(touched);
+        setEdits({});
+        setPinned({});
+        setSavedAt(null);
+        fcToolMemo.savedAt = null;
+        reload();
+      } catch (e) {
+        alert("Error discarding draft: " + e.message);
+      } finally {
+        setSaving(false);
+      }
+    }
+    const th = (label, title) => h("th", { key: label, title, style: { padding: "7px 10px", textAlign: "left", color: "#8b949e", fontWeight: 600, fontSize: 10, textTransform: "uppercase", borderBottom: "1px solid #21262d", whiteSpace: "nowrap" } }, label);
+    const smallBtn = { ...btnS, padding: "1px 6px", fontSize: 10, lineHeight: 1.4 };
+    return h(
       Modal,
-      { title: "\u{1F4E6} Forecast Orders Created", onClose, width: 460 },
-      import_react.default.createElement(
-        "div",
-        { style: { textAlign: "center", padding: "20px 0" } },
-        import_react.default.createElement("div", { style: { fontSize: 32, marginBottom: 12 } }, "\u2705"),
-        import_react.default.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#10b981", marginBottom: 8 } }, `${needsOrder.length} forecast order${needsOrder.length !== 1 ? "s" : ""} created`),
-        import_react.default.createElement("div", { style: { fontSize: 12, color: "#8b949e", marginBottom: 20 } }, "These appear in the orders list tagged as Forecast and are excluded from stock calculations until confirmed."),
-        import_react.default.createElement("button", { style: btnP, onClick: onClose }, "Done")
-      )
-    );
-    return import_react.default.createElement(
-      Modal,
-      { title: "\u{1F4E6} Forecast Order Calculator", onClose, width: 700 },
+      { title: "\u{1F4E6} Forecast Orders", onClose: close, width: 880 },
       // Controls
-      import_react.default.createElement(
+      h(
         "div",
         { style: { background: "#0d1117", border: "1px solid #21262d", borderRadius: 8, padding: "14px 16px", marginBottom: 16 } },
-        import_react.default.createElement(
+        draftDates.length > 0 && h(
+          "div",
+          { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12, fontSize: 11, color: "#8b949e" } },
+          "Saved drafts:",
+          draftDates.map(([d, n]) => h("button", {
+            key: d,
+            onClick: () => d !== dueDate && setDueDate(d),
+            style: { ...smallBtn, padding: "2px 8px", background: d === dueDate ? "#a78bfa22" : "transparent", color: d === dueDate ? "#a78bfa" : "#8b949e", border: `1px solid ${d === dueDate ? "#a78bfa66" : "#30363d"}` }
+          }, `${fmtDate(d)} \xB7 ${n} order${n !== 1 ? "s" : ""}`))
+        ),
+        h(
           "div",
           { style: { display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" } },
-          import_react.default.createElement(
-            Field,
-            { label: "Order Due Date" },
-            import_react.default.createElement("input", { type: "date", style: { ...inp, width: 160 }, value: dueDate, onChange: (e) => setDueDate(e.target.value) })
+          h(Field, { label: "Order Due Date" },
+            h("input", { type: "date", style: { ...inp, width: 160 }, value: dueDate, onChange: (e) => setDueDate(e.target.value) })
           ),
-          import_react.default.createElement(
-            Field,
-            { label: "Buffer weeks after due date" },
-            import_react.default.createElement("input", {
-              type: "number",
-              style: { ...inp, width: 70 },
-              value: bufferWks,
-              min: 1,
-              max: 12,
-              onChange: (e) => setBufferWks(Math.max(1, +e.target.value))
-            })
+          h(Field, { label: "Buffer weeks after due date" },
+            h("input", { type: "number", style: { ...inp, width: 70 }, value: bufferWks, min: 1, max: 12, onChange: (e) => setBufferWks(Math.max(1, +e.target.value)) })
           ),
-          import_react.default.createElement(
+          h(
             "div",
             { style: { paddingBottom: 12 } },
-            import_react.default.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 } }, "Branches"),
-            import_react.default.createElement(
+            h("div", { style: { fontSize: 11, fontWeight: 600, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 } }, "Branches"),
+            h(
               "div",
               { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
-              branches.map((b) => import_react.default.createElement(
+              branches.map((b) => h(
                 "label",
                 { key: b.id, style: { display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 12, color: selectedBr[b.id] ? "#e6edf3" : "#484f58" } },
-                import_react.default.createElement("input", { type: "checkbox", checked: !!selectedBr[b.id], onChange: (e) => setSelectedBr((p) => ({ ...p, [b.id]: e.target.checked })) }),
+                h("input", { type: "checkbox", checked: !!selectedBr[b.id], onChange: (e) => setSelectedBr((p) => ({ ...p, [b.id]: e.target.checked })) }),
                 b.name
               ))
             )
           )
         ),
-        import_react.default.createElement(
+        h(
           "div",
           { style: { fontSize: 11, color: "#8b949e" } },
-          `Stock projected at ${bufferWks} week${bufferWks !== 1 ? "s" : ""} after ${dueDate ? fmtDate(dueDate) : "\u2014"}. Edit quantities before creating orders.`
+          `Projected stock and suggestions are for ${fmtDate(dueDate)}, covering ${bufferWks} week${bufferWks !== 1 ? "s" : ""} after, and ignore your forecast drafts. `,
+          hasDraft ? "Order Qty starts from your saved draft." : "Order Qty starts from the suggestion."
         )
       ),
-      // Needs order — grouped by supplier
-      needsOrder.length > 0 && import_react.default.createElement(
+      // Planned lines, grouped by supplier
+      inPlan.length > 0 && h(
         "div",
         { style: { marginBottom: 16 } },
-        import_react.default.createElement(
+        h(
           "div",
-          { style: { fontSize: 12, fontWeight: 700, color: "#f97316", marginBottom: 12 } },
-          `\u26A0 Order Required \u2014 ${needsOrder.length} material${needsOrder.length !== 1 ? "s" : ""}`
+          { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+          h("div", { style: { fontSize: 12, fontWeight: 700, color: "#a78bfa" } }, `Forecast order — ${inPlan.length} material${inPlan.length !== 1 ? "s" : ""}`),
+          inPlan.some((r) => getQty(r) !== r.suggested) && h("button", { style: smallBtn, onClick: () => useSuggested(inPlan), title: "Set every Order Qty to the suggested qty" }, "Use all suggested")
         ),
         Object.entries(supplierGroups).map(([supplier, rows]) => {
           const mix = getMixSummary(rows);
-          return import_react.default.createElement(
+          return h(
             "div",
             { key: supplier, style: { background: "#0d1117", border: "1px solid #21262d", borderRadius: 8, marginBottom: 12, overflow: "hidden" } },
-            // Supplier header
-            import_react.default.createElement(
+            h(
               "div",
               { style: { background: "#161b22", padding: "8px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #21262d" } },
-              import_react.default.createElement(
-                "span",
-                { style: { fontWeight: 700, color: "#58a6ff", fontSize: 12 } },
-                supplier === "Unassigned" ? "\u26A0 No supplier assigned" : supplier
-              ),
-              mix && import_react.default.createElement(
-                "span",
-                { style: { fontSize: 11, color: "#10b981" } },
-                `Mix: ${mix.totalContainers} container${mix.totalContainers !== 1 ? "s" : ""} total (${mix.totalKg.toLocaleString()} kg)`
-              )
+              h("span", { style: { fontWeight: 700, color: "#58a6ff", fontSize: 12 } }, supplier === "Unassigned" ? "⚠ No supplier assigned" : supplier),
+              mix && h("span", { style: { fontSize: 11, color: "#10b981" } }, `Mix: ${mix.totalContainers} container${mix.totalContainers !== 1 ? "s" : ""} total (${mix.totalKg.toLocaleString()} kg)`)
             ),
-            // Lines
-            import_react.default.createElement(
+            h(
               "table",
               { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
-              import_react.default.createElement("thead", null, import_react.default.createElement(
+              h("thead", null, h(
                 "tr",
                 { style: { background: "#0d1117" } },
-                ["Branch", "Material", "Projected", "Shortfall", "Order Qty", "Containers"].map(
-                  (h) => import_react.default.createElement("th", { key: h, style: { padding: "7px 10px", textAlign: "left", color: "#8b949e", fontWeight: 600, fontSize: 10, textTransform: "uppercase", borderBottom: "1px solid #21262d" } }, h)
-                )
+                th("Branch"), th("Material"), th("Projected"), th("Shortfall"),
+                th("Suggested", "Calculated from projected stock and forecast usage"),
+                th("Saved", "Qty in your saved forecast draft"),
+                th("Order Qty"), th("Containers")
               )),
-              import_react.default.createElement(
+              h(
                 "tbody",
                 null,
-                rows.map((r, i) => {
-                  const qty = getQty(r);
+                rows.map((r) => {
+                  const qty = getQty(r), saved = savedQty(r);
                   const containers = r.mt?.container_qty > 0 ? Math.round(qty / r.mt.container_qty * 10) / 10 : null;
                   const bags = r.mt?.bag_qty > 0 ? Math.round(qty / r.mt.bag_qty) : null;
-                  return import_react.default.createElement(
+                  return h(
                     "tr",
-                    { key: `${r.br.id}_${r.m.id}`, style: { borderBottom: "1px solid #21262d" } },
-                    import_react.default.createElement("td", { style: { padding: "7px 10px", color: "#58a6ff", fontWeight: 600 } }, r.br.name),
-                    import_react.default.createElement("td", { style: { padding: "7px 10px", fontWeight: 600 } }, r.m.name),
-                    import_react.default.createElement("td", { style: { padding: "7px 10px", color: r.projStock < 0 ? "#ef4444" : "#8b949e" } }, N(Math.round(r.projStock))),
-                    import_react.default.createElement("td", { style: { padding: "7px 10px", color: "#f97316", fontWeight: 600 } }, N(Math.round(Math.max(0, r.shortfall)))),
-                    // Editable qty with +/- step buttons (0.5 container)
-                    import_react.default.createElement(
+                    { key: keyOf(r), style: { borderBottom: "1px solid #21262d", opacity: qty === 0 ? 0.6 : 1 } },
+                    h("td", { style: { padding: "7px 10px", color: "#58a6ff", fontWeight: 600 } }, r.br.name),
+                    h("td", { style: { padding: "7px 10px", fontWeight: 600 } }, r.m.name),
+                    h("td", { style: { padding: "7px 10px", color: r.projStock < 0 ? "#ef4444" : "#8b949e" } }, N(Math.round(r.projStock))),
+                    h("td", { style: { padding: "7px 10px", color: r.shortfall > 0 ? "#f97316" : "#484f58", fontWeight: 600 } }, N(Math.round(Math.max(0, r.shortfall)))),
+                    h("td", { style: { padding: "7px 10px", color: "#8b949e", whiteSpace: "nowrap" } },
+                      N(r.suggested),
+                      qty !== r.suggested && h("button", { style: { ...smallBtn, marginLeft: 6 }, onClick: () => setQty(r, r.suggested), title: "Use suggested qty" }, "↺")
+                    ),
+                    h("td", { style: { padding: "7px 10px", color: saved !== qty ? "#a78bfa" : "#8b949e", fontWeight: saved !== qty ? 700 : 400 } }, saved ? N(saved) : "—"),
+                    h(
                       "td",
                       { style: { padding: "4px 6px" } },
-                      import_react.default.createElement("div", { style: { display: "flex", alignItems: "center", gap: 3 } },
-                        import_react.default.createElement("button", {
-                          style: { ...btnS, padding: "4px 8px", fontSize: 14, lineHeight: 1, minWidth: 28 },
-                          onClick: () => {
-                            const step = r.mt?.container_qty > 0 ? r.mt.container_qty * 0.5 : 1000;
-                            setQty(r, Math.max(0, (+qty || 0) - step));
-                          }
-                        }, "−"),
-                        import_react.default.createElement("input", {
+                      h("div", { style: { display: "flex", alignItems: "center", gap: 3 } },
+                        h("button", { style: { ...btnS, padding: "4px 8px", fontSize: 14, lineHeight: 1, minWidth: 28 }, onClick: () => setQty(r, (+qty || 0) - stepOf(r)) }, "−"),
+                        h("input", {
                           type: "number",
                           style: { ...inp, width: 90, padding: "4px 8px", color: "#10b981", fontWeight: 700, textAlign: "center" },
                           value: qty,
                           onChange: (e) => setQty(r, e.target.value)
                         }),
-                        import_react.default.createElement("button", {
-                          style: { ...btnS, padding: "4px 8px", fontSize: 14, lineHeight: 1, minWidth: 28 },
-                          onClick: () => {
-                            const step = r.mt?.container_qty > 0 ? r.mt.container_qty * 0.5 : 1000;
-                            setQty(r, (+qty || 0) + step);
-                          }
-                        }, "+")
+                        h("button", { style: { ...btnS, padding: "4px 8px", fontSize: 14, lineHeight: 1, minWidth: 28 }, onClick: () => setQty(r, (+qty || 0) + stepOf(r)) }, "+")
                       )
                     ),
-                    import_react.default.createElement(
-                      "td",
-                      { style: { padding: "7px 10px", color: "#8b949e", fontSize: 11 } },
-                      containers ? `${containers}x ${N(r.mt.container_qty)}kg` : bags ? `${bags} bags` : "\u2014"
-                    )
+                    h("td", { style: { padding: "7px 10px", color: "#8b949e", fontSize: 11 } },
+                      containers ? `${containers}x ${N(r.mt.container_qty)}kg` : bags ? `${bags} bags` : "—")
                   );
                 })
               )
             ),
-            // Mix detail
-            mix && import_react.default.createElement(
+            mix && h(
               "div",
               { style: { padding: "8px 14px", borderTop: "1px solid #21262d", fontSize: 11, color: "#10b981", background: "#10b98108" } },
-              `\u{1F4A1} Same supplier \u2014 mix ${rows.map((r) => `${Math.round(getQty(r) / r.mt.bag_qty)} bags ${r.m.name}`).join(" + ")} = ${mix.totalContainers} full container${mix.totalContainers !== 1 ? "s" : ""} of ${mix.bagsPerContainer} bags each (${mix.bagQty.toLocaleString()} kg/bag)`
+              `\u{1F4A1} Same supplier — mix ${rows.filter((r) => getQty(r) > 0).map((r) => `${Math.round(getQty(r) / r.mt.bag_qty)} bags ${r.m.name}`).join(" + ")} = ${mix.totalContainers} full container${mix.totalContainers !== 1 ? "s" : ""} of ${mix.bagsPerContainer} bags each (${mix.totalKg.toLocaleString()} kg)`
             )
           );
         })
       ),
-      // Sufficient
-      sufficient.length > 0 && import_react.default.createElement(
+      // Materials not needed: can still be added to the order
+      others.length > 0 && h(
         "div",
         { style: { marginBottom: 16 } },
-        import_react.default.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "#10b981", marginBottom: 8 } }, "\u2713 Sufficient \u2014 " + sufficient.length + " material" + (sufficient.length !== 1 ? "s" : "")),
-        import_react.default.createElement(
+        h("div", { style: { fontSize: 12, fontWeight: 700, color: "#10b981", marginBottom: 8 } }, "✓ Sufficient — " + others.length + " material" + (others.length !== 1 ? "s" : ""),
+          h("span", { style: { fontWeight: 400, color: "#8b949e", marginLeft: 8, fontSize: 11 } }, "click + to add to the order anyway")
+        ),
+        h(
           "div",
           { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
-          sufficient.map((r, i) => import_react.default.createElement(
+          others.map((r) => h(
             "div",
-            { key: i, style: { background: "#10b98111", border: "1px solid #10b98133", borderRadius: 5, padding: "4px 10px", fontSize: 11 } },
-            import_react.default.createElement("span", { style: { color: "#58a6ff", fontWeight: 600 } }, r.br.name),
+            { key: keyOf(r), style: { background: "#10b98111", border: "1px solid #10b98133", borderRadius: 5, padding: "4px 6px 4px 10px", fontSize: 11, display: "flex", alignItems: "center", gap: 4 } },
+            h("span", { style: { color: "#58a6ff", fontWeight: 600 } }, r.br.name),
             " \xB7 ",
-            import_react.default.createElement("span", { style: { color: "#e6edf3" } }, r.m.name),
+            h("span", { style: { color: "#e6edf3" } }, r.m.name),
             " ",
-            import_react.default.createElement("span", { style: { color: "#10b981" } }, N(Math.round(r.projStock)) + " kg")
+            h("span", { style: { color: "#10b981" } }, N(Math.round(r.projStock)) + " kg"),
+            h("button", { style: { ...smallBtn, marginLeft: 4, color: "#10b981" }, onClick: () => setQty(r, stepOf(r)), title: "Add to forecast order" }, "+")
           ))
         )
       ),
-      // Create orders button
-      needsOrder.length > 0 && import_react.default.createElement(
+      // Footer
+      h(
         "div",
-        { style: { borderTop: "1px solid #21262d", paddingTop: 16, display: "flex", gap: 10, justifyContent: "flex-end" } },
-        import_react.default.createElement(
+        { style: { borderTop: "1px solid #21262d", paddingTop: 16, display: "flex", gap: 10, justifyContent: "flex-end", alignItems: "center" } },
+        h(
           "div",
           { style: { flex: 1, fontSize: 11, color: "#8b949e", lineHeight: 1.6 } },
-          "Creates draft orders tagged as ",
-          import_react.default.createElement("span", { style: { background: "#1f6feb22", color: "#58a6ff", borderRadius: 3, padding: "1px 5px" } }, "Forecast"),
-          " \u2014 no PO number, price or date. Excluded from stock calculations until you confirm them."
+          dirty
+            ? h("span", { style: { color: "#f59e0b", fontWeight: 600 } }, "● Unsaved changes. ")
+            : savedAt && h("span", { style: { color: "#10b981", fontWeight: 600 } }, `✓ Saved ${savedAt}. `),
+          "Saved as ",
+          h("span", { style: { background: "#a78bfa22", color: "#a78bfa", borderRadius: 3, padding: "1px 5px" } }, "Forecast"),
+          " orders (no PO), included in projected stock on every view. Edit again here any time, or confirm them in the orders list once placed."
         ),
-        import_react.default.createElement("button", { style: btnG, onClick: onClose }, "Cancel"),
-        import_react.default.createElement(
+        hasDraft && h("button", { style: btnD, onClick: discardDraft, disabled: saving }, "Discard draft"),
+        h("button", { style: btnG, onClick: close }, "Close"),
+        h(
           "button",
-          { style: { ...btnP, background: "#10b981" }, onClick: createOrders, disabled: creating },
-          creating ? "Creating\u2026" : "Create Forecast Orders"
+          { style: { ...btnP, background: "#10b981", opacity: dirty ? 1 : 0.5 }, onClick: saveDraft, disabled: saving || !dirty },
+          saving ? "Saving…" : "Save Draft"
         )
       )
     );
@@ -14647,7 +14763,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
       onSave();
     }
 
-    return import_react.default.createElement(Modal, { title: `\u{1F4E6} Actual Closing Stock \u2014 Wk ${week.week_number} (w/e ${fmtDate(week.week_ending)})`, onClose, width: 420 },
+    return import_react.default.createElement(Modal, { title: `\u{1F4E6} Actual Closing Stock \u2014 Wk ${wkNo(week)} (w/e ${fmtDate(week.week_ending)})`, onClose, width: 420 },
       import_react.default.createElement("p", { style: { color: "#8b949e", fontSize: 12, marginBottom: 14 } },
         "Enter the actual closing stock count. Overrides the calculated figure in the log and the projection cascades forward from this value."
       ),
@@ -14788,7 +14904,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
           onChange: e => setWeekNum(e.target.value) },
           import_react.default.createElement("option", { value: "" }, "— select week —"),
           fromWeeks.map(w => import_react.default.createElement("option", { key: w.id, value: w.week_number },
-            "Wk " + w.week_number + " (w/e " + fmtDate(w.week_ending) + ")"
+            "Wk " + wkNo(w) + " (w/e " + fmtDate(w.week_ending) + ")"
           ))
         )
       ),
@@ -14802,10 +14918,10 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
           N(+qty) + " kg of ", import_react.default.createElement("strong", { style: { color: "#e6edf3" } }, selectedMat?.name),
           " from ", import_react.default.createElement("strong", { style: { color: "#58a6ff" } }, fromBr?.name),
           " \u2192 ", import_react.default.createElement("strong", { style: { color: "#58a6ff" } }, toBr?.name),
-          " starting Wk " + weekNum
+          " starting Wk " + wkOfNum(weekNum, fromWeeks)
         ),
         import_react.default.createElement("div", { style: { fontSize: 11, color: "#484f58", marginTop: 4 } },
-          "Reduces opening stock in " + fromBr?.name + " and increases in " + toBr?.name + " for week " + weekNum
+          "Reduces opening stock in " + fromBr?.name + " and increases in " + toBr?.name + " for week " + wkOfNum(weekNum, fromWeeks)
         )
       ),
 
@@ -14876,7 +14992,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
     if (Math.abs(pct3) < 25) return null;
     return { m: m3, fc: fc3, av6: av6f, pct: pct3 };
   }).filter(Boolean) : [];
-  const winS = Math.max(0, curIdx - 4), winE = Math.min(bw.length - 1, curIdx + 14), dispWks = bw.slice(winS, winE + 1);
+  const winS = Math.max(0, curIdx - 4), winE = Math.min(bw.length - 1, curIdx + 16), dispWks = bw.slice(winS, winE + 1);
     const twoMonthsAgo = /* @__PURE__ */ new Date();
     twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
     const twoMonthsAgoStr = twoMonthsAgo.toISOString().slice(0, 10);
@@ -14949,6 +15065,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
         eta: hdr.eta || null,
         eta_locked: !!hdr.eta_locked,
         received: !!hdr.received,
+        is_forecast: !!hdr.is_forecast && !hdr.received,
         notes: hdr.notes || null,
         // Keep top-level qty as sum of lines for backward compat
         qty: lines.reduce((s, l) => s + (+l.qty || 0), 0),
@@ -15015,7 +15132,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                   const tMat = allMats.find(m => m.id === (isOut ? t.from_material_id : t.to_material_id));
                   return import_react.default.createElement("tr", { key: i, style: { borderBottom: "1px solid #21262d", background: isOut ? "#f59e0b08" : "#10b98108" } },
                     import_react.default.createElement("td", { style: { padding: "7px 8px", fontSize: 11, color: "#8b949e" } }, t.created_at ? new Date(t.created_at).toLocaleDateString() : "—"),
-                    import_react.default.createElement("td", { style: { padding: "7px 8px", fontSize: 11, color: "#e6edf3", fontWeight: 600 } }, "Wk " + t.week_number),
+                    import_react.default.createElement("td", { style: { padding: "7px 8px", fontSize: 11, color: "#e6edf3", fontWeight: 600 } }, "Wk " + wkOfNum(t.week_number, bw)),
                     import_react.default.createElement("td", { style: { padding: "7px 8px", fontSize: 11, color: "#58a6ff" } }, fromBrName),
                     import_react.default.createElement("td", { style: { padding: "7px 8px", fontSize: 11, color: "#58a6ff" } }, toBrName),
                     import_react.default.createElement("td", { style: { padding: "7px 8px", fontSize: 11, color: "#e6edf3" } }, tMat?.name || "—"),
@@ -15048,7 +15165,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
         "p",
         { style: { color: "#8b949e", fontSize: 12, margin: "0 0 14px" } },
         "Week ",
-        import_react.default.createElement("strong", { style: { color: "#e6edf3" } }, curWk.week_number),
+        import_react.default.createElement("strong", { style: { color: "#e6edf3" } }, wkNo(curWk)),
         " (w/e ",
         fmtDate(curWk.week_ending),
         ")"
@@ -15278,7 +15395,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
         import_react.default.createElement(
           "tr",
           { onClick: () => setExpanded(isExp ? null : w.id), style: { borderBottom: "1px solid #21262d", cursor: "pointer", background: isCur ? "#1f6feb0d" : isExp ? "#161b22" : "transparent", borderLeft: isCur ? "3px solid #1f6feb" : "3px solid transparent" } },
-          import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 800, color: isCur ? "#58a6ff" : "#e6edf3" } }, w.week_number),
+          import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 800, color: isCur ? "#58a6ff" : "#e6edf3" } }, wkNo(w)),
           import_react.default.createElement("td", { style: { padding: "8px 9px", color: "#8b949e", whiteSpace: "nowrap" } }, fmtDate(w.week_ending)),
           showFcst ? mats.map((m) => import_react.default.createElement("td", { key: `f${m.id}`, style: { padding: "6px 6px", color: "#8b949e", width: 72 } }, N(u[m.id]?.forecast_qty))) : [],
           mats.map((m) => {
@@ -15325,6 +15442,14 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
               import_react.default.createElement("span", { style: { color: isHist ? "#8b949e" : st ? SC[st] : "#e6edf3", fontWeight: isHist ? 400 : 600, marginRight: 3 } }, N(s)),
               isFut && import_react.default.createElement("span", { style: { color: "#484f58", fontSize: 10 } }, "~"),
               !isHist && (st === "critical" || st === "low") && import_react.default.createElement(Pill, { status: st }),
+              (() => {
+                const od = w.id === stockMap._overdueWeekId ? stockMap._overdue?.[m.id] : 0;
+                if (!od) return null;
+                return import_react.default.createElement("span", {
+                  title: `Includes ${N(od)} overdue, not received`,
+                  style: { marginLeft: 4, fontSize: 10, cursor: "help", color: "#f59e0b", background: "#f59e0b18", border: "1px solid #f59e0b44", borderRadius: 3, padding: "0 4px" }
+                }, `⏳ ${N(od)}`);
+              })(),
               (() => {
                 const wr = bRecon && bRecon.find(r2 => r2.material_id === m.id && r2.week_id === w.id);
                 if (!wr || wr.variance === null || (wr.variance === 0 && !(wr.notes && wr.notes.startsWith("Resolved")))) return null;
@@ -15598,7 +15723,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
           import_react.default.createElement(
             "tbody",
             null,
-            filtOrds.length === 0 && import_react.default.createElement("tr", null, import_react.default.createElement("td", { colSpan: 11, style: { padding: 24, color: "#484f58", textAlign: "center" } }, "No orders")),
+            filtOrds.length === 0 && import_react.default.createElement("tr", null, import_react.default.createElement("td", { colSpan: 13, style: { padding: 24, color: "#484f58", textAlign: "center" } }, "No orders")),
             filtOrds.sort((a, b) => {
               const aEta = (bLines2.filter((l) => l.order_id === a.id && l.eta).sort((x, y) => x.eta > y.eta ? 1 : -1)[0]?.eta || a.eta || "9").slice(0, 10);
               const bEta = (bLines2.filter((l) => l.order_id === b.id && l.eta).sort((x, y) => x.eta > y.eta ? 1 : -1)[0]?.eta || b.eta || "9").slice(0, 10);
@@ -15621,12 +15746,7 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                   background: !isEffectivelyReceived(o) && o.eta && o.eta.slice(0,10) < todayLocal() ? "#ef444408" : "transparent" } },
                 import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600, color: "#58a6ff" } }, br?.name || branch.name),
                 import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600 } }, o.po_ref || "\u2014"),
-                import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
-                import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
-                import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
-                import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
-                import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
-                import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
+                import_react.default.createElement("td", { style: { padding: "8px 9px" } }, o.supplier || "\u2014"),
                 import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
                 import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
                 (() => {
@@ -15640,6 +15760,11 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                     supQ2 > 0 ? N(supQ2)+" / "+N(ordQ2)+" kg ("+pct+"%)" : "—"
                   );
                 })(),
+                import_react.default.createElement("td", { style: { padding: "8px 9px" } }, o.price_per_kg > 0 ? `$${o.price_per_kg}` : "\u2014"),
+                import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
+                import_react.default.createElement("td", { style: { padding: "8px 9px", whiteSpace: "nowrap" } }, o.eta ? fmtDate(o.eta) : "\u2014"),
+                import_react.default.createElement("td", { style: { padding: "8px 9px" } }, "\u2014"),
+                import_react.default.createElement("td", { style: { padding: "8px 9px", color: "#8b949e", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, o.notes || "\u2014"),
                 (() => {
                   const erp = (erpPoLines || []).filter(l => { const a = String(l.hdr_seqno||'').trim(); const b2 = String(o.po_ref||'').trim(); return a === b2 || Number(a) === Number(b2); });
                   const hasErp = erp.length > 0;
@@ -15673,8 +15798,6 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                       },
                       style: { ...btnS, fontSize: 10, background: "#10b98122", color: "#10b981", border: "1px solid #10b98144" }
                     }, "\u2713 Received"),
-                    o.is_forecast && import_react.default.createElement("button", { onClick: () => setConvertModal(o), style: { ...btnS, fontSize: 10, background: "#a78bfa22", color: "#a78bfa", border: "1px solid #a78bfa44" } }, "\u2192 Confirm"),
-
                     role === "admin" && import_react.default.createElement("button", { onClick: () => setOrderModal({ order: o, lines: orderLines.filter((l) => l.order_id === o.id) }), style: { background: "none", border: "none", color: "#8b949e", cursor: "pointer", padding: 4 } }, "\u270F")
                   )
                 )
@@ -15701,6 +15824,13 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                   import_react.default.createElement("td", { style: { padding: "8px 9px" } }, showPO ? o.supplier || "\u2014" : ""),
                   import_react.default.createElement("td", { style: { padding: "8px 9px", color: "#e6edf3" } }, matLabels || import_react.default.createElement("span", { style: { color: "#484f58" } }, "\u2014")),
                   import_react.default.createElement("td", { style: { padding: "8px 9px", fontWeight: 600 } }, grpQty > 0 ? N(grpQty) : "\u2014"),
+                  (() => {
+                    // Received for this ETA group: full qty on received lines, sup_quant on part-received
+                    const rcvd = grpLines.reduce((s, l) => s + (l.received ? (+l.qty || 0) : Math.min(+l.sup_quant || 0, +l.qty || 0)), 0);
+                    const col = grpQty > 0 && rcvd >= grpQty ? "#10b981" : rcvd > 0 ? "#f59e0b" : "#484f58";
+                    return import_react.default.createElement("td", { style: { padding: "8px 9px", whiteSpace: "nowrap", color: col, fontWeight: rcvd > 0 ? 700 : 400 } },
+                      rcvd > 0 ? (rcvd >= grpQty ? N(rcvd) : N(rcvd) + " (" + Math.round(rcvd / grpQty * 100) + "%)") : "\u2014");
+                  })(),
                   import_react.default.createElement("td", { style: { padding: "8px 9px" } }, showPO && o.price_per_kg > 0 ? `$${o.price_per_kg}` : "\u2014"),
                   import_react.default.createElement("td", { style: { padding: "8px 9px", color: "#10b981", fontWeight: 600 } }, o.price_per_kg > 0 && grpQty > 0 ? `$${(o.price_per_kg * grpQty / 1e3).toFixed(1)}k` : "\u2014"),
                   import_react.default.createElement(
@@ -15723,16 +15853,6 @@ function SettingsPage({ materialTypes, branches, allMaterials, suppliers, branch
                     )
                   ),
                   import_react.default.createElement("td", { style: { padding: "8px 9px", color: "#8b949e", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, showPO ? o.notes || "\u2014" : ""),
-                  gi === 0 ? (() => {
-                    const erpR = (erpPoLines || []).filter(l => { const a=String(l.hdr_seqno||'').trim(); const b2=String(o.po_ref||'').trim(); return a===b2||Number(a)===Number(b2); });
-                    const supR = erpR.reduce((s,l)=>s+(l.sup_quant||0),0);
-                    const ordR = erpR.reduce((s,l)=>s+(l.ord_quant||0),0);
-                    const pctR = ordR > 0 ? Math.round(supR/ordR*100) : 0;
-                    const colR = supR >= ordR ? "#10b981" : supR > 0 ? "#f59e0b" : "#484f58";
-                    return import_react.default.createElement("td", { style: { padding: "7px 8px", whiteSpace: "nowrap", color: colR, fontWeight: supR>0?700:400 } },
-                      erpR.length && supR > 0 ? N(supR)+" / "+N(ordR)+" kg ("+pctR+"%)" : "—"
-                    );
-                  })() : import_react.default.createElement("td", null),
                   import_react.default.createElement("td", { style: { padding: "7px 8px", whiteSpace: "nowrap" } }, gi === 0 ? (() => {
                     const erpZ = (erpPoLines || []).filter(l => { const a = String(l.hdr_seqno||'').trim(); const b2 = String(o.po_ref||'').trim(); return a === b2 || Number(a) === Number(b2); });
                     const hasZ = erpZ.length > 0;
@@ -16678,6 +16798,7 @@ setOrders(ords);
         eta: hdr.eta || null,
         eta_locked: !!hdr.eta_locked,
         received: !!hdr.received,
+        is_forecast: !!hdr.is_forecast && !hdr.received,
         notes: hdr.notes || null,
         qty: lines.reduce((s, l) => s + (+l.qty || 0), 0),
         material_id: lines[0]?.material_id || null,
